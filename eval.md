@@ -21,6 +21,9 @@ To evaluate particular model on particular split:
 Serve custom model
 ```
 python scripts/serve_policy.py policy:checkpoint --policy.config pi05_aloha --policy.dir gs://openpi-assets/checkpoints/pi05_base
+
+# Or make libero above
+python scripts/serve_policy.py policy:checkpoint --policy.config pi0_libero_low_mem_finetune --policy.dir /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/checkpoints/pi0_libero_low_mem_finetune/debug-v1/29999/
 ```
 
 Evaluate on libero10
