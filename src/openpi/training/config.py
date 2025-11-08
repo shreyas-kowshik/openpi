@@ -506,12 +506,12 @@ class TrainConfig:
     # How often (in steps) to log training metrics.
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
-    save_interval: int = 1000
+    save_interval: int = 6000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
     keep_period: int | None = 5000
 
     # Action L1 loss interval
-    action_l1_loss_interval: int = -1
+    action_l1_loss_interval: int = 1000 # Tends to increase GPU memory so log more sparsely
 
     # If true, will overwrite the checkpoint directory if it already exists.
     overwrite: bool = False
@@ -690,7 +690,7 @@ _CONFIGS = [
         # L1 loss logging interval
         # By default, we don't log L1 loss
         # Keep a little large as for a diffusion policy this will run denoising
-        action_l1_loss_interval=1,
+        action_l1_loss_interval=1000,
         # Log action dimension explicitly
         action_dim=7, # 7 for libero
         # The freeze filter defines which parameters should be frozen during training.
@@ -724,7 +724,7 @@ _CONFIGS = [
         # L1 loss logging interval
         # By default, we don't log L1 loss
         # Keep a little large as for a diffusion policy this will run denoising
-        action_l1_loss_interval=1,
+        action_l1_loss_interval=1000,
         # Log action dimension explicitly
         action_dim=7, # 7 for libero
         # The freeze filter defines which parameters should be frozen during training.
@@ -757,7 +757,7 @@ _CONFIGS = [
         # L1 loss logging interval
         # By default, we don't log L1 loss
         # Keep a little large as for a diffusion policy this will run denoising
-        action_l1_loss_interval=1,
+        action_l1_loss_interval=1000,
         # Log action dimension explicitly
         action_dim=7, # 7 for libero
         # The freeze filter defines which parameters should be frozen during training.
@@ -790,7 +790,7 @@ _CONFIGS = [
         # L1 loss logging interval
         # By default, we don't log L1 loss
         # Keep a little large as for a diffusion policy this will run denoising
-        action_l1_loss_interval=1,
+        action_l1_loss_interval=1000,
         # Log action dimension explicitly
         action_dim=7, # 7 for libero
         lr_schedule=_optimizer.CosineDecaySchedule(
@@ -829,7 +829,7 @@ _CONFIGS = [
         # L1 loss logging interval
         # By default, we don't log L1 loss
         # Keep a little large as for a diffusion policy this will run denoising
-        action_l1_loss_interval=1,
+        action_l1_loss_interval=1000,
         # Log action dimension explicitly
         action_dim=7, # 7 for libero
         lr_schedule=_optimizer.CosineDecaySchedule(
@@ -868,7 +868,7 @@ _CONFIGS = [
         # L1 loss logging interval
         # By default, we don't log L1 loss
         # Keep a little large as for a diffusion policy this will run denoising
-        action_l1_loss_interval=1,
+        action_l1_loss_interval=1000,
         # Log action dimension explicitly
         action_dim=7, # 7 for libero
         lr_schedule=_optimizer.CosineDecaySchedule(
