@@ -183,6 +183,8 @@ def train_step(
             lambda _, x: x.value.ndim > 1,
         ),
     )
+
+    # jax.debug.breakpoint()
     info = {
         "loss": loss,
         "grad_norm": optax.global_norm(grads),
@@ -267,6 +269,16 @@ def main(config: _config.TrainConfig):
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
+
+            # # if config.action_l1_loss_interval > 0 and step % config.action_l1_loss_interval == 0:
+            # Compute L1 loss between the model's output and the actions
+            model = nnx.merge(train_state.model_def, train_state.params)
+            out_inferred = model.sample_actions(train_rng, batch[0])
+            # Compute L1 loss between the model's output and the actions for each dimension and log them to wandb
+            for i in range(config.action_dim):
+                l1_loss = jnp.mean(jnp.abs(out_inferred[:, :, i] - batch[1][:, :, i]))
+                wandb.log({"l1_loss_dim_" + str(i): l1_loss}, step=step)
+        
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:

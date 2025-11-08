@@ -500,6 +500,8 @@ class TrainConfig:
     num_workers: int = 2
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
+    # Action dimension
+    action_dim: int = 32
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
@@ -507,6 +509,9 @@ class TrainConfig:
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
     keep_period: int | None = 5000
+
+    # Action L1 loss interval
+    action_l1_loss_interval: int = -1
 
     # If true, will overwrite the checkpoint directory if it already exists.
     overwrite: bool = False
@@ -679,9 +684,22 @@ _CONFIGS = [
         # Base directory for config assets (e.g., norm stats).
         assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
         # Base directory for checkpoints.
-        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/checkpoints",
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft_DEBUG/checkpoints",
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         num_train_steps=30_000,
+        # L1 loss logging interval
+        # By default, we don't log L1 loss
+        # Keep a little large as for a diffusion policy this will run denoising
+        action_l1_loss_interval=1,
+        # Log action dimension explicitly
+        action_dim=7, # 7 for libero
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
         # The freeze filter defines which parameters should be frozen during training.
         # We have a convenience function in the model config that returns the default freeze filter
         # for the given model config for LoRA finetuning. Just make sure it matches the model config

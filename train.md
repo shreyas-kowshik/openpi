@@ -16,7 +16,7 @@ Pi0.5 in general is a 2.3B model
 
 Start fine tuning
 ```
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_low_mem_finetune --exp-name=debug-v1 --overwrite
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_low_mem_finetune --exp-name=debug-v2 --overwrite
 ```
 
 LoRA
@@ -61,4 +61,7 @@ class CosineDecaySchedule(LRScheduleConfig):
     decay_steps: int = 30_000
     decay_lr: float = 2.5e-6
 ```
+
+Default `batch_size=32`
+This might not be optimal for LoRA, check ThinkingMachines blog for this
 
