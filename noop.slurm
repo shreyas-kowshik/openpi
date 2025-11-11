@@ -9,4 +9,4 @@
 #SBATCH --output=/data/user_data/skowshik/rlvr-debug/outcome_%j.out      # Standard output file (%j is job ID)
 #SBATCH --error=/data/user_data/skowshik/rlvr-debug/outcome_%j.out       # Standard error file (%j is job ID)
 
-python noop.py
+conda run -n openpi python noop.py

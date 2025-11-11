@@ -19,6 +19,11 @@ Start fine tuning
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_low_mem_finetune --exp-name=debug-v2 --overwrite
 ```
 
+Debug
+```
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_low_mem_finetune_debug --exp-name=debug-v3
+```
+
 LoRA
 
 LoRA configs defined in `src/openpi/models/gemma.py`

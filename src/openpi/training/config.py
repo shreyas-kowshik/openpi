@@ -671,6 +671,39 @@ _CONFIGS = [
         # Check the base TrainConfig class for a full list of available hyperparameters.
         num_train_steps=30_000,
     ),
+    # Debug #
+    TrainConfig(
+        name="pi0_libero_low_mem_finetune_debug",
+        # Here is an example of loading a pi0 model for LoRA fine-tuning.
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft_DEBUG/checkpoints",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=30_000,
+        # L1 loss logging interval
+        # By default, we don't log L1 loss
+        # Keep a little large as for a diffusion policy this will run denoising
+        action_l1_loss_interval=1000,
+        # Log action dimension explicitly
+        action_dim=7, # 7 for libero
+        # The freeze filter defines which parameters should be frozen during training.
+        # We have a convenience function in the model config that returns the default freeze filter
+        # for the given model config for LoRA finetuning. Just make sure it matches the model config
+        # you chose above.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+    ),
     TrainConfig(
         name="pi0_libero_low_mem_finetune",
         # Here is an example of loading a pi0 model for LoRA fine-tuning.
@@ -883,6 +916,47 @@ _CONFIGS = [
         # you chose above.
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+    ),
+    # LoRA variant with action_out_proj layer unfrozen
+    TrainConfig(
+        name="pi0_libero_low_mem_finetune_v6_last_layer",
+        # Example of LoRA fine-tuning with the action_out_proj layer unfrozen.
+        # This unfreezes the final action projection layer in addition to LoRA adapters.
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            train_action_expert_last_layer=True,  # Unfreeze action_out_proj
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft_lowmem_v6_last_layer/checkpoints",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=50_000,
+        # L1 loss logging interval
+        action_l1_loss_interval=1000,
+        # Log action dimension explicitly
+        action_dim=7,  # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=3_000,
+            peak_lr=2.5e-5,
+            decay_steps=50_000,
+            decay_lr=2.5e-6,
+        ),
+        # The freeze filter must match the model config to properly unfreeze action_out_proj.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            train_action_expert_last_layer=True,  # Must match the model config
         ).get_freeze_filter(),
         # Turn off EMA for LoRA finetuning.
         ema_decay=None,

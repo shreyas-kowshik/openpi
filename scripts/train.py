@@ -236,6 +236,7 @@ def main(config: _config.TrainConfig):
     wandb.log({"camera_views": images_to_log}, step=0)
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
+    jax.debug.breakpoint()
     jax.block_until_ready(train_state)
     logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
 

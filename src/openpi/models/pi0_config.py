@@ -31,6 +31,9 @@ class Pi0Config(_model.BaseModelConfig):
     pi05: bool = False
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
+    # If True, the action_out_proj layer (final action projection layer) will be unfrozen during LoRA fine-tuning.
+    # Default is False (action_out_proj remains frozen).
+    train_action_expert_last_layer: bool = False
 
     def __post_init__(self):
         if self.max_token_len is None:
@@ -103,6 +106,12 @@ class Pi0Config(_model.BaseModelConfig):
             filters.append(
                 nnx.Not(nnx_utils.PathRegex(".*lora.*")),
             )
+            
+            # If train_action_expert_last_layer is True, also unfreeze action_out_proj.
+            if self.train_action_expert_last_layer:
+                filters.append(
+                    nnx.Not(nnx_utils.PathRegex(".*action_out_proj.*")),
+                )
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)
