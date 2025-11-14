@@ -736,7 +736,7 @@ _CONFIGS = [
         # Turn off EMA for LoRA finetuning.
         ema_decay=None,
     ),
-    # LoRA Training variants #
+    # LoRA Training variants V1 #
     # Default LoRA variant + Rank 64 (x2)
     TrainConfig(
         name="pi0_libero_low_mem_finetune_v1",
@@ -920,15 +920,23 @@ _CONFIGS = [
         # Turn off EMA for LoRA finetuning.
         ema_decay=None,
     ),
-    # LoRA variant with action_out_proj layer unfrozen
+    # LoRA Training variants V2 #
+    # Use pi05 #
     TrainConfig(
-        name="pi0_libero_low_mem_finetune_v6_last_layer",
+        name="pi05_libero_lora_vision_full_ft_action_full_ft_siglip",
         # Example of LoRA fine-tuning with the action_out_proj layer unfrozen.
         # This unfreezes the final action projection layer in addition to LoRA adapters.
         model=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
+            action_expert_variant="gemma_300m", # Full finetuning
+            # Only for debugging #
+            # THIS WORKS WHEN FREEZING ALL PARAMETERS #
+            # paligemma_variant="gemma_2b",
+            # action_expert_variant="gemma_300m",
+            #########################################################
             train_action_expert_last_layer=True,  # Unfreeze action_out_proj
+            pi05=True, action_horizon=10,
+            discrete_state_input=False,
         ),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
@@ -939,28 +947,149 @@ _CONFIGS = [
         # Base directory for config assets (e.g., norm stats).
         assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
         # Base directory for checkpoints.
-        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft_lowmem_v6_last_layer/checkpoints",
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
-        num_train_steps=50_000,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_full_ft_action_full_ft_siglip/checkpoints",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        save_interval=10_000,
         # L1 loss logging interval
-        action_l1_loss_interval=1000,
+        action_l1_loss_interval=5000,
         # Log action dimension explicitly
         action_dim=7,  # 7 for libero
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=3_000,
+            warmup_steps=10_000,
             peak_lr=2.5e-5,
-            decay_steps=50_000,
+            decay_steps=100_000,
             decay_lr=2.5e-6,
         ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         # The freeze filter must match the model config to properly unfreeze action_out_proj.
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
+            action_expert_variant="gemma_300m",
+            # Only for debugging #
+            # THIS WORKS WHEN FREEZING ALL PARAMETERS #
+            # paligemma_variant="gemma_2b",
+            # action_expert_variant="gemma_300m",
+            #########################################################
             train_action_expert_last_layer=True,  # Must match the model config
+            pi05=True,
         ).get_freeze_filter(),
         # Turn off EMA for LoRA finetuning.
         ema_decay=None,
     ),
+    # 2 #
+    TrainConfig(
+        name="pi05_libero_lora_vision_full_ft_action_freeze_siglip",
+        # Example of LoRA fine-tuning with the action_out_proj layer unfrozen.
+        # This unfreezes the final action projection layer in addition to LoRA adapters.
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m", # Full finetuning
+            # Only for debugging #
+            # THIS WORKS WHEN FREEZING ALL PARAMETERS #
+            # paligemma_variant="gemma_2b",
+            # action_expert_variant="gemma_300m",
+            #########################################################
+            train_action_expert_last_layer=True,  # Unfreeze action_out_proj
+            pi05=True, action_horizon=10,
+            discrete_state_input=False,
+            freeze_siglip=True,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_full_ft_action_freeze_siglip/checkpoints",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        save_interval=10_000,
+        # L1 loss logging interval
+        action_l1_loss_interval=5000,
+        # Log action dimension explicitly
+        action_dim=7,  # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        # The freeze filter must match the model config to properly unfreeze action_out_proj.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            # Only for debugging #
+            # THIS WORKS WHEN FREEZING ALL PARAMETERS #
+            # paligemma_variant="gemma_2b",
+            # action_expert_variant="gemma_300m",
+            #########################################################
+            freeze_siglip=True,
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+    ),
+    # Full FT vision + LoRA action expert #
+    TrainConfig(
+        name="pi05_libero_fullft_vision_lora_action_full_ft_siglip",
+        # Example of LoRA fine-tuning with the action_out_proj layer unfrozen.
+        # This unfreezes the final action projection layer in addition to LoRA adapters.
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m_lora", # Full finetuning
+            # Only for debugging #
+            # THIS WORKS WHEN FREEZING ALL PARAMETERS #
+            # paligemma_variant="gemma_2b",
+            # action_expert_variant="gemma_300m",
+            #########################################################
+            train_action_expert_last_layer=True,  # Unfreeze action_out_proj
+            pi05=True, action_horizon=10,
+            discrete_state_input=False,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_fullft_vision_lora_action_full_ft_siglip/checkpoints",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        save_interval=10_000,
+        # L1 loss logging interval
+        action_l1_loss_interval=5000,
+        # Log action dimension explicitly
+        action_dim=7,  # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        # The freeze filter must match the model config to properly unfreeze action_out_proj.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m_lora",
+            # Only for debugging #
+            # THIS WORKS WHEN FREEZING ALL PARAMETERS #
+            # paligemma_variant="gemma_2b",
+            # action_expert_variant="gemma_300m",
+            #########################################################
+            train_action_expert_last_layer=True,  # Must match the model config
+            pi05=True,
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+    ),
+    #################################################################################################################
     TrainConfig(
         name="pi0_fast_libero",
         # Here is an example of loading a pi0-FAST model for full finetuning.

@@ -1,6 +1,7 @@
 import dataclasses
 import functools
 import logging
+import pickle
 import platform
 from typing import Any
 
@@ -188,6 +189,7 @@ def train_step(
     info = {
         "loss": loss,
         "grad_norm": optax.global_norm(grads),
+        "grad_norm_action_out_proj": optax.global_norm(grads.filter(nnx_utils.PathRegex(".*action_out_proj.*"))),
         "param_norm": optax.global_norm(kernel_params),
     }
     return new_state, info
@@ -236,9 +238,36 @@ def main(config: _config.TrainConfig):
     wandb.log({"camera_views": images_to_log}, step=0)
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
-    jax.debug.breakpoint()
+    # jax.debug.breakpoint()
     jax.block_until_ready(train_state)
     logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
+
+    # Dump trainable parameter names to pickle file
+    trainable_params = train_state.params.filter(config.trainable_filter)
+    trainable_param_names = list(traverse_util.flatten_dict(trainable_params.to_pure_dict()).keys())
+    trainable_param_names_str = ["/".join(map(str, key)) for key in trainable_param_names]
+    
+    # Calculate total number of trainable parameters
+    trainable_params_flat = traverse_util.flatten_dict(trainable_params.to_pure_dict())
+    total_trainable_params = sum(np.prod(p.shape) for p in trainable_params_flat.values())
+    
+    # Calculate total number of all model parameters (including frozen)
+    all_params_flat = traverse_util.flatten_dict(train_state.params.to_pure_dict())
+    total_model_params = sum(np.prod(p.shape) for p in all_params_flat.values())
+    trainable_percentage = (total_trainable_params / total_model_params * 100) if total_model_params > 0 else 0
+    
+    logs_dir = epath.Path("logs")
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    trainable_params_file = logs_dir / f"trainable_{config.name}.pkl"
+    
+    with open(trainable_params_file, "wb") as f:
+        pickle.dump(trainable_param_names_str, f)
+    
+    logging.info(f"Dumped {len(trainable_param_names_str)} trainable parameter names to {trainable_params_file}")
+    logging.info(f"Total model parameters: {total_model_params:,}")
+    logging.info(f"Total trainable parameters: {total_trainable_params:,} ({trainable_percentage:.2f}%)")
+    logging.info(f"Total frozen parameters: {total_model_params - total_trainable_params:,}")
+    logging.info(f"First 10 trainable params: {trainable_param_names_str[:10]}")
 
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)

@@ -67,6 +67,35 @@ class CosineDecaySchedule(LRScheduleConfig):
     decay_lr: float = 2.5e-6
 ```
 
+All LoRA *AND* attention computation happens in `models/lora.py`
+
 Default `batch_size=32`
 This might not be optimal for LoRA, check ThinkingMachines blog for this
+
+# LoRA V2 training experiments on Libero
+Default hyperparameters, train longer (100k steps), Unfreeze final layer full/curriculum, Switch off LoRA for VLM/keep present
+
+```
+cp -r /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi0_libero_low_mem_finetune_v1 /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi05_libero_low_mem_finetune_V2_v1_unfreeze_action_out_proj
+
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_low_mem_finetune_V2_v1_unfreeze_action_out_proj --exp-name=debug-v4 --overwrite
+```
+
+
+LoRA + Full FT ablations
+Full FT action layers + LoRA gemma layers + Full FT SigLIP
+```
+cp -r /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi0_libero_low_mem_finetune_v1 /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi05_libero_lora_vision_full_ft_action_full_ft_siglip
+
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_full_ft_action_full_ft_siglip --exp-name=pi05_libero_lora_vision_full_ft_action_full_ft_siglip-v1
+```
+
+Above + Freeze SigLIP
+```
+cp -r /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi0_libero_low_mem_finetune_v1 /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi05_libero_lora_vision_full_ft_action_freeze_siglip
+```
+
+```
+cp -r /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi0_libero_low_mem_finetune_v1 /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi05_libero_fullft_vision_lora_action_full_ft_siglip
+```
 

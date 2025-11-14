@@ -34,6 +34,8 @@ class Pi0Config(_model.BaseModelConfig):
     # If True, the action_out_proj layer (final action projection layer) will be unfrozen during LoRA fine-tuning.
     # Default is False (action_out_proj remains frozen).
     train_action_expert_last_layer: bool = False
+    # If True, the SigLIP vision encoder will be frozen during training.
+    freeze_siglip: bool = False
 
     def __post_init__(self):
         if self.max_token_len is None:
@@ -85,6 +87,14 @@ class Pi0Config(_model.BaseModelConfig):
         has_lora = False
         gemma_params_filter = nnx_utils.PathRegex(".*llm.*")
         action_expert_params_filter = nnx_utils.PathRegex(".*llm.*_1.*")
+
+        # For debugging only #
+        # Exclue all parameters in model
+        # filters.append(
+        #     nnx_utils.PathRegex(".*"),
+        # )
+        #########################################################
+
         if "lora" in self.paligemma_variant:
             filters.append(
                 gemma_params_filter,
@@ -112,6 +122,15 @@ class Pi0Config(_model.BaseModelConfig):
                 filters.append(
                     nnx.Not(nnx_utils.PathRegex(".*action_out_proj.*")),
                 )
+        
+        if self.freeze_siglip:
+            filters.append(
+                nnx_utils.PathRegex(".*img.*"),
+            )
+        
+
+        print("Filters: ", filters)
+        
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)

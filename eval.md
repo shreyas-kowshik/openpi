@@ -35,7 +35,7 @@ python scripts/serve_policy.py policy:checkpoint --policy.config pi0_libero_low_
 python scripts/serve_policy.py policy:checkpoint --policy.config pi0_libero_low_mem_finetune_v2 --policy.dir /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft_lowmem_v2/checkpoints/pi0_libero_low_mem_finetune_v2/loramem_ft_v2/18000/
 
 # Eval LoRA v4
-python scripts/serve_policy.py policy:checkpoint --policy.config pi0_libero_low_mem_finetune_v4 --policy.dir /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft_lowmem_v4/checkpoints/pi0_libero_low_mem_finetune_v4/loramem_ft_v4/
+python scripts/serve_policy.py policy:checkpoint --policy.config pi0_libero_low_mem_finetune_v4 --policy.dir /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft_lowmem_v4/checkpoints/pi0_libero_low_mem_finetune_v4/loramem_ft_v4/29999/
 ```
 
 Evaluate on libero10
@@ -55,7 +55,7 @@ python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out
 
 python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/videos_v2/ 2>&1 | tee logs/libero_10_lora_v2.log
 
-python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/videos_v4/ 2>&1 | tee logs/libero_10_lora_v4.log
+python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/videos_v4_30k/ 2>&1 | tee logs/libero_10_lora_v4_30k.log
 ```
 
 # Kill all processes in case server is still running from a previous launch
