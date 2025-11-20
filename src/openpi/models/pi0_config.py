@@ -127,10 +127,7 @@ class Pi0Config(_model.BaseModelConfig):
             filters.append(
                 nnx_utils.PathRegex(".*img.*"),
             )
-        
-
-        print("Filters: ", filters)
-        
+          
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)

@@ -73,3 +73,46 @@ Get PGID and kill all processes with given PGID
 kill -- -2996402
 ```
 
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lora_vision_full_ft_action_full_ft_siglip --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_full_ft_action_full_ft_siglip/checkpoints/pi05_libero_lora_vision_full_ft_action_full_ft_siglip/pi05_libero_lora_vision_full_ft_action_full_ft_siglip-v1/50000/
+
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lora_vision_full_ft_action_full_ft_siglip --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_full_ft_action_full_ft_siglip/checkpoints/pi05_libero_lora_vision_full_ft_action_full_ft_siglip/pi05_libero_lora_vision_full_ft_action_full_ft_siglip-v1/80000/
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/pi05_libero_lora_vision_full_ft_action_full_ft_siglip/ 2>&1 | tee logs/pi05_libero_lora_vision_full_ft_action_full_ft_siglip_50k.log
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/pi05_libero_lora_vision_full_ft_action_full_ft_siglip_80k/ 2>&1 | tee logs/pi05_libero_lora_vision_full_ft_action_full_ft_siglip_80k.log
+```
+
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi0_libero_lora_vision_full_ft_action_full_ft_siglip --policy.dir /data/user_data/skowshik/openpi_cache/pi0_libero_lora_vision_full_ft_action_full_ft_siglip/checkpoints/pi0_libero_lora_vision_full_ft_action_full_ft_siglip/pi0_libero_lora_vision_full_ft_action_full_ft_siglip-v1/50000/
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/pi0_libero_lora_vision_full_ft_action_full_ft_siglip/ 2>&1 | tee logs/pi0_libero_lora_vision_full_ft_action_full_ft_siglip_50k.log
+```
+
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_fullft_vision_lora_action_full_ft_siglip --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_fullft_vision_lora_action_full_ft_siglip/checkpoints/pi05_libero_fullft_vision_lora_action_full_ft_siglip/pi05_libero_fullft_vision_lora_action_full_ft_siglip-v1_fresh/20000/
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/pi05_libero_fullft_vision_lora_action_full_ft_siglip_20k/ 2>&1 | tee logs/pi05_libero_fullft_vision_lora_action_full_ft_siglip_20k.log
+```
+
+
+# Libero one task evals
+```
+mkdir -p /data/user_data/skowshik/tmp_jax
+export TMPDIR=/data/user_data/skowshik/tmp_jax
+export TEMP=$TMPDIR
+export TMP=$TMPDIR
+
+python scripts/serve_policy.py policy:checkpoint --policy.config pi0_libero_lora_moka_pots_task_ep29 --policy.dir /data/user_data/skowshik/openpi_cache/pi0_libero_lora_moka_pots_task_ep29/checkpoints/pi0_libero_lora_moka_pots_task_ep29/pi0_libero_lora_moka_pots_task_ep29-v1/10000/
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi0_libero_lora_moka_pots_task_ep29_10k/ 2>&1 | tee logs/pi0_libero_lora_moka_pots_task_ep29_10k.log
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi0_libero_lora_moka_pots_task_ep29_20k/ 2>&1 | tee logs/pi0_libero_lora_moka_pots_task_ep29_20k.log
+```
+
+Full FT
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi0_libero_fullft_moka_pots_task_ep29 --policy.dir /data/user_data/skowshik/openpi_cache/pi0_libero_fullft_moka_pots_task_ep29/checkpoints/pi0_libero_fullft_moka_pots_task_ep29/pi0_libero_fullft_moka_pots_task_ep29-v1/10000/
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi0_libero_fullft_moka_pots_task_ep29_10k/ 2>&1 | tee logs/pi0_libero_fullft_moka_pots_task_ep29_10k.log
+```

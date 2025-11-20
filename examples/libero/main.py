@@ -44,6 +44,8 @@ class Args:
 
     seed: int = 7  # Random Seed (for reproducibility)
 
+    task_name: str = None
+
 
 def eval_libero(args: Args) -> None:
     # Set random seed
@@ -83,6 +85,11 @@ def eval_libero(args: Args) -> None:
 
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
+
+        if args.task_name is not None:
+            if task.name != args.task_name:
+                logging.info(f"Skipping task {task.name} because it doesn't match {args.task_name}")
+                continue
 
         # Start episodes
         task_episodes, task_successes = 0, 0

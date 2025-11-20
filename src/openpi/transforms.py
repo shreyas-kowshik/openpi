@@ -110,6 +110,20 @@ class InjectDefaultPrompt(DataTransformFn):
             data["prompt"] = np.asarray(self.prompt)
         return data
 
+@dataclasses.dataclass(frozen=True)
+class FilterPrompt(DataTransformFn):
+    """Deprecated: Use FilteredDataset in data_loader.py instead.
+    
+    This transform is kept for backwards compatibility but should not be used.
+    Filtering at the transform level is inefficient and can cause issues with
+    the data pipeline when returning None.
+    """
+    prompt: str = None
+
+    def __call__(self, data: DataDict) -> DataDict:
+        # No-op: filtering is now handled at the dataset level
+        return data
+
 
 @dataclasses.dataclass(frozen=True)
 class Normalize(DataTransformFn):
@@ -124,6 +138,7 @@ class Normalize(DataTransformFn):
             _assert_quantile_stats(self.norm_stats)
 
     def __call__(self, data: DataDict) -> DataDict:
+        # breakpoint()
         if self.norm_stats is None:
             return data
 

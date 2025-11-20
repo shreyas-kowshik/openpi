@@ -99,3 +99,10 @@ cp -r /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi0_lib
 cp -r /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi0_libero_low_mem_finetune_v1 /data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets/pi05_libero_fullft_vision_lora_action_full_ft_siglip
 ```
 
+```
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_lora_vision_full_ft_action_full_ft_siglip --exp-name=pi0_libero_lora_vision_full_ft_action_full_ft_siglip-v1
+```
+
+```
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_low_mem_finetune --exp-name=debug-v1
+```
