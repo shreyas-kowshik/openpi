@@ -4,7 +4,7 @@
 #SBATCH --constraint=VRAM_80GB
 #SBATCH --gres=gpu:1
 #SBATCH --mem=128G
-#SBATCH --time=48:00:00          # time (1 day)
+#SBATCH --time=24:00:00          # time (1 day)
 #SBATCH --output=/data/user_data/skowshik/openpi-loraft-debug/H100_outcome_%j.out      # Standard output file (%j is job ID)
 #SBATCH --error=/data/user_data/skowshik/openpi-loraft-debug/H100_outcome_%j.out       # Standard error file (%j is job ID)
 

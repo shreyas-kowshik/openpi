@@ -2,7 +2,7 @@
 #SBATCH --job-name=openpi-loraft-debug
 #SBATCH --partition=general          # partition name
 #SBATCH --qos=normal            # qos
-#SBATCH --gres=gpu:A6000:1
+#SBATCH --gres=gpu:A6000:8
 #SBATCH --cpus-per-task=8          # number of CPUs (increased)
 #SBATCH --time=48:00:00          # time (1 day)
 #SBATCH --mem=128G                   # 128GB total RAM (increased from 48GB)
@@ -36,3 +36,22 @@ export HF_DATASETS_CACHE="/data/user_data/skowshik/huggingface"
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_lora_moka_pots_task_ep5 --exp-name=pi0_libero_lora_moka_pots_task_ep5-v1 --resume 2>&1 | tee logs/train/pi0_libero_lora_moka_pots_task_ep5-v1.log
 
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_fullft_moka_pots_task_ep29 --exp-name=pi0_libero_fullft_moka_pots_task_ep29-v1 --resume 2>&1 | tee logs/train/pi0_libero_fullft_moka_pots_task_ep29-v1.log
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_fullft_moka_pots_task_ep29 --exp-name=pi0_libero_fullft_moka_pots_task_ep29-v2_ema_default --resume 2>&1 | tee logs/train/pi0_libero_fullft_moka_pots_task_ep29-v2_ema_default.log
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_fullft_moka_pots_task_ep29 --exp-name=pi0_libero_fullft_moka_pots_task_ep29-v2_ema_default --resume 2>&1 | tee logs/train/pi0_libero_fullft_moka_pots_task_ep29-v2_ema_default.log
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_fullft_moka_pots_task_ep29 --exp-name=debug-v1 --overwrite
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29 --exp-name=pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29-v1 2>&1 | tee logs/train/pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29-v1.log
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29_v2 --exp-name=pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29_v2_ema-v1 2>&1 | tee logs/train/pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29_v2_ema-v1.log
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_lora_moka_pots_task_ep29 --exp-name=pi0_libero_lora_moka_pots_task_ep29-v1-30k_resume 2>&1 | tee logs/train/pi0_libero_lora_moka_pots_task_ep29-v1-30k_resume.log
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_lora_book_compartment_task_ep41 --exp-name=pi0_libero_lora_book_compartment_task_ep41-v1 --resume 2>&1 | tee logs/train/pi0_libero_lora_book_compartment_task_ep41_libero_128.log
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_vision_lora_fullft_action_book_compartment_task_ep41_init_vision_pi05_libero --exp-name=pi05_libero_vision_lora_fullft_action_book_compartment_task_ep41_init_vision_pi05_libero-v1 --resume 2>&1 | tee logs/train/pi05_libero_vision_lora_fullft_action_book_compartment_task_ep41_init_vision_pi05_libero_128.log
+
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_fullft_action_init_vision_v1 --exp-name=pi05_libero_lora_vision_fullft_action_init_vision_v1-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_fullft_action_init_vision_v1.log
+

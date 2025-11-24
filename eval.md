@@ -116,3 +116,34 @@ python scripts/serve_policy.py policy:checkpoint --policy.config pi0_libero_full
 
 python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi0_libero_fullft_moka_pots_task_ep29_10k/ 2>&1 | tee logs/pi0_libero_fullft_moka_pots_task_ep29_10k.log
 ```
+
+Debug
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29 --policy.dir /data/user_data/skowshik/openpi_cache/merged_checkpoint/
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/debug/ 2>&1 | tee logs/debug.log
+```
+
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29 --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29/pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29-v1/2500/
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29_2.5k/ 2>&1 | tee logs/pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29_2.5k.log
+```
+
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi0_libero_lora_book_compartment_task_ep41 --policy.dir /data/user_data/skowshik/openpi_cache/pi0_libero_lora_book_compartment_task_ep41/pi0_libero_lora_book_compartment_task_ep41-v1/20000/
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "STUDY_SCENE1_pick_up_the_book_and_place_it_in_the_back_compartment_of_the_caddy" --args.video_out_path data/libero/pi0_libero_lora_book_compartment_task_ep41.20k/ 2>&1 | tee logs/pi0_libero_lora_book_compartment_task_ep41.20k.log
+```
+
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_vision_lora_fullft_action_book_compartment_task_ep41_init_vision_pi05_libero --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_vision_lora_fullft_action_book_compartment_task_ep41_init_vision_pi05_libero/pi05_libero_vision_lora_fullft_action_book_compartment_task_ep41_init_vision_pi05_libero-v1/20000/
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "STUDY_SCENE1_pick_up_the_book_and_place_it_in_the_back_compartment_of_the_caddy" --args.video_out_path data/libero/pi05_libero_vision_lora_fullft_action_book_compartment_task_ep41_init_vision_pi05_libero.20k/ 2>&1 | tee logs/pi05_libero_vision_lora_fullft_action_book_compartment_task_ep41_init_vision_pi05_libero.20k.log
+```
+
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lora_vision_fullft_action_init_vision_v1 --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_fullft_action_init_vision_v1/pi05_libero_lora_vision_fullft_action_init_vision_v1-v1/1000
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/pi05_libero_lora_vision_fullft_action_init_vision_v1.1k/ 2>&1 | tee logs/pi05_libero_lora_vision_fullft_action_init_vision_v1.1k.log
+```

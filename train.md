@@ -106,3 +106,7 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_lora_visio
 ```
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_low_mem_finetune --exp-name=debug-v1
 ```
+
+```
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/vis_alphareq.py pi05_vis_alphareq --exp-name=vis_alphareq-v1
+```

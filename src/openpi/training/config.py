@@ -674,6 +674,35 @@ _CONFIGS = [
         # Check the base TrainConfig class for a full list of available hyperparameters.
         num_train_steps=30_000,
     ),
+    TrainConfig(
+        # Change the name to reflect your model and dataset.
+        name="pi05_vis_alphareq",
+        # Here you define the model config -- In this example we use pi0 as the model
+        # architecture and perform *full* finetuning. in the examples below we show how to modify
+        # this to perform *low-memory* (LORA) finetuning and use pi0-FAST as an alternative architecture.
+        model=pi0_config.Pi0Config(pi05=True),
+        # Here you define the dataset you are training on. In this example we use the Libero
+        # dataset. For your own dataset, you can change the repo_id to point to your dataset.
+        # Also modify the DataConfig to use the new config you made for your dataset above.
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                # This flag determines whether we load the prompt (i.e. the task instruction) from the
+                # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
+                # a field called ``prompt`` in the input dict. The recommended setting is True.
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        # Here you define which pre-trained checkpoint you want to load to initialize the model.
+        # This should match the model config you chose above -- i.e. in this case we use the pi0 base model.
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
+        # Check the base TrainConfig class for a full list of available hyperparameters.
+        num_train_steps=30_000,
+        wandb_enabled=False,
+    ),
     # Debug #
     TrainConfig(
         name="pi0_libero_low_mem_finetune_debug",
@@ -1176,9 +1205,10 @@ _CONFIGS = [
         # Base directory for config assets (e.g., norm stats).
         assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
         # Base directory for checkpoints.
-        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/pi0_libero_lora_moka_pots_task_ep29/checkpoints",
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
-        num_train_steps=30_000,
+        # checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/pi0_libero_lora_moka_pots_task_ep29/checkpoints",
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/pi0_libero_lora_moka_pots_task_ep29/checkpoints/pi0_libero_lora_moka_pots_task_ep29/pi0_libero_lora_moka_pots_task_ep29-v1/29999/params/"),
+        num_train_steps=50_000,
         # L1 loss logging interval
         # By default, we don't log L1 loss
         # Keep a little large as for a diffusion policy this will run denoising
@@ -1186,6 +1216,12 @@ _CONFIGS = [
         save_interval=10_000,
         # Log action dimension explicitly
         action_dim=7, # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1,
+            peak_lr=1e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
         # The freeze filter defines which parameters should be frozen during training.
         # We have a convenience function in the model config that returns the default freeze filter
         # for the given model config for LoRA finetuning. Just make sure it matches the model config
@@ -1201,7 +1237,8 @@ _CONFIGS = [
     TrainConfig(
         name="pi0_libero_fullft_moka_pots_task_ep29",
         # Here is an example of loading a pi0 model for LoRA fine-tuning.
-        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b", action_expert_variant="gemma_300m"),
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m",
+                                   pi05=True, action_horizon=10),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             base_config=DataConfig(
@@ -1215,26 +1252,43 @@ _CONFIGS = [
         # Base directory for config assets (e.g., norm stats).
         assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
         # Base directory for checkpoints.
-        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/pi0_libero_fullft_moka_pots_task_ep29/checkpoints",
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
-        num_train_steps=30_000,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         # L1 loss logging interval
         # By default, we don't log L1 loss
         # Keep a little large as for a diffusion policy this will run denoising
         action_l1_loss_interval=1000,
-        save_interval=10_000,
+        # save_interval=10_000,
+        save_interval=2,
+        batch_size=1,
         # Log action dimension explicitly
         action_dim=7, # 7 for libero
         # The freeze filter defines which parameters should be frozen during training.
         # We have a convenience function in the model config that returns the default freeze filter
         # for the given model config for LoRA finetuning. Just make sure it matches the model config
         # you chose above.
-        freeze_filter=pi0_config.Pi0Config(
-            paligemma_variant="gemma_2b", action_expert_variant="gemma_300m"
-        ).get_freeze_filter(),
+        # freeze_filter=pi0_config.Pi0Config(
+        #     paligemma_variant="gemma_2b", action_expert_variant="gemma_300m"
+        # ).get_freeze_filter(),
         # Turn off EMA for LoRA finetuning.
-        ema_decay=None,
+        # ema_decay=None,
         num_workers=0,
+
+        # Major change other than EMA in v2 #
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        num_train_steps=1,
+
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m",
+            pi05=True,
+        ).get_freeze_filter(),
+
+        wandb_enabled=False,
     ),
     # Ep 20 #
     TrainConfig(
@@ -1351,6 +1405,215 @@ _CONFIGS = [
         ).get_freeze_filter(),
         # Turn off EMA for LoRA finetuning.
         ema_decay=None,
+        num_workers=0,
+    ),
+    ### Init with pi05 libero vision params, full ft only action params, lora vision params ###
+    TrainConfig(
+        name="pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29",
+        # Example of LoRA fine-tuning with the action_out_proj layer unfrozen.
+        # This unfreezes the final action projection layer in addition to LoRA adapters.
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m", # Full finetuning
+            pi05=True, action_horizon=10,
+            discrete_state_input=False,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                                    prompt_from_task=True, 
+                                    filter_prompt="put both moka pots on the stove",
+                                    num_episodes=29,
+                                   ),
+            extra_delta_transform=True,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/merged_checkpoint/params"),
+        resume=True,
+        num_train_steps=30_000,
+        save_interval=2_500,
+        # L1 loss logging interval
+        action_l1_loss_interval=2_500,
+        # Log action dimension explicitly
+        action_dim=7,  # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        # The freeze filter must match the model config to properly unfreeze action_out_proj.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+        num_workers=0,
+    ),
+    TrainConfig(
+        name="pi05_libero_vision_init_libero_lora_vision_fullft_action_onetask_ep29_v2",
+        # Example of LoRA fine-tuning with the action_out_proj layer unfrozen.
+        # This unfreezes the final action projection layer in addition to LoRA adapters.
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m", # Full finetuning
+            pi05=True, action_horizon=10,
+            discrete_state_input=False,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                                    prompt_from_task=True, 
+                                    filter_prompt="put both moka pots on the stove",
+                                    num_episodes=29,
+                                   ),
+            extra_delta_transform=True,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/merged_checkpoint/params"),
+        resume=True,
+        num_train_steps=30_000,
+        save_interval=1_000,
+        # L1 loss logging interval
+        action_l1_loss_interval=2_500,
+        # Log action dimension explicitly
+        action_dim=7,  # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=1e-5,
+        ),
+        batch_size=32,
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        # The freeze filter must match the model config to properly unfreeze action_out_proj.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+        ).get_freeze_filter(),
+        num_workers=0,
+    ),
+    ##### Book compartment task exps #####
+    TrainConfig(
+        name="pi0_libero_lora_book_compartment_task_ep41",
+        # Here is an example of loading a pi0 model for LoRA fine-tuning.
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                                    prompt_from_task=True, 
+                                    filter_prompt="pick up the book and place it in the back compartment of the caddy",
+                                    num_episodes=41,
+                                   ),
+            extra_delta_transform=True,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=100_000,
+        # L1 loss logging interval
+        # By default, we don't log L1 loss
+        # Keep a little large as for a diffusion policy this will run denoising
+        action_l1_loss_interval=1000,
+        save_interval=2_500,
+        # Log action dimension explicitly
+        action_dim=7, # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=128,
+        # The freeze filter defines which parameters should be frozen during training.
+        # We have a convenience function in the model config that returns the default freeze filter
+        # for the given model config for LoRA finetuning. Just make sure it matches the model config
+        # you chose above.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+        num_workers=0,
+    ),
+    # TrainConfig(
+    #     name="pi05_libero",
+    #     model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+    #     data=LeRobotLiberoDataConfig(
+    #         repo_id="physical-intelligence/libero",
+    #         base_config=DataConfig(prompt_from_task=True),
+    #         extra_delta_transform=False,
+    #     ),
+    #     batch_size=256,
+    #     lr_schedule=_optimizer.CosineDecaySchedule(
+    #         warmup_steps=10_000,
+    #         peak_lr=5e-5,
+    #         decay_steps=1_000_000,
+    #         decay_lr=5e-5,
+    #     ),
+    #     optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+    #     ema_decay=0.999,
+    #     weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    #     pytorch_weight_path="/path/to/your/pytorch_weight_path",
+    #     num_train_steps=30_000,
+    # ),
+    TrainConfig(
+        # name="pi05_libero_vision_lora_fullft_action_book_compartment_task_ep41_init_vision_pi05_libero",
+        name="pi05_libero_lora_vision_fullft_action_init_vision_v1",
+        # Here is an example of loading a pi0 model for LoRA fine-tuning.
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/merged_checkpoint/params"),
+        num_train_steps=100_000,
+        # L1 loss logging interval
+        # By default, we don't log L1 loss
+        # Keep a little large as for a diffusion policy this will run denoising
+        action_l1_loss_interval=1000,
+        save_interval=1_000,
+        # Log action dimension explicitly
+        action_dim=7, # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=256,
+        # The freeze filter defines which parameters should be frozen during training.
+        # We have a convenience function in the model config that returns the default freeze filter
+        # for the given model config for LoRA finetuning. Just make sure it matches the model config
+        # you chose above.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        # ema_decay=None,
         num_workers=0,
     ),
     #################################################################################################################
