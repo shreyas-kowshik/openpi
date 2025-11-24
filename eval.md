@@ -147,3 +147,9 @@ python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lor
 
 python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/pi05_libero_lora_vision_fullft_action_init_vision_v1.1k/ 2>&1 | tee logs/pi05_libero_lora_vision_fullft_action_init_vision_v1.1k.log
 ```
+
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lora_vision_fullft_action_v1 --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_fullft_action_v1/pi05_libero_lora_vision_fullft_action_v1-v1/3000
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/pi05_libero_lora_vision_fullft_action_v1.3k/ 2>&1 | tee logs/pi05_libero_lora_vision_fullft_action_v1.3k.log
+```
