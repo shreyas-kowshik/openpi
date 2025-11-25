@@ -185,9 +185,10 @@ class Unnormalize(DataTransformFn):
 class ResizeImages(DataTransformFn):
     height: int
     width: int
-
+    # TODO Raise error and dont call this 
     def __call__(self, data: DataDict) -> DataDict:
-        data["image"] = {k: image_tools.resize_with_pad(v, self.height, self.width) for k, v in data["image"].items()}
+        # data["image"] = {k: image_tools.resize_with_pad(v, self.height, self.width) for k, v in data["image"].items()}
+        # data["image"] = {k: image_tools.resize_with_pad_jax(v, self.height, self.width) for k, v in data["image"].items()}
         return data
 
 
@@ -196,7 +197,15 @@ class SubsampleActions(DataTransformFn):
     stride: int
 
     def __call__(self, data: DataDict) -> DataDict:
-        data["actions"] = data["actions"][:: self.stride]
+        actions = data["actions"]
+        # if batched: (B, T, A)
+        if actions.ndim == 3:
+            data["actions"] = actions[:, ::self.stride]
+        # if unbatched: (T, A)
+        elif actions.ndim == 2:
+            data["actions"] = actions[::self.stride]
+        else:
+            raise ValueError("Unexpected action shape: {}".format(actions.shape))
         return data
 
 
@@ -244,49 +253,225 @@ class AbsoluteActions(DataTransformFn):
         return data
 
 
+# @dataclasses.dataclass(frozen=True)
+# class TokenizePrompt(DataTransformFn):
+#     tokenizer: _tokenizer.PaligemmaTokenizer
+#     discrete_state_input: bool = False
+
+#     def __call__(self, data: DataDict) -> DataDict:
+#         if (prompt := data.pop("prompt", None)) is None:
+#             raise ValueError("Prompt is required")
+
+#         if self.discrete_state_input:
+#             if (state := data.get("state", None)) is None:
+#                 raise ValueError("State is required.")
+#         else:
+#             state = None
+
+#         if not isinstance(prompt, str):
+#             prompt = prompt.item()
+        
+#         tokens, token_masks = self.tokenizer.tokenize(prompt, state)
+#         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
+
 @dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
     discrete_state_input: bool = False
 
+    def _to_py_str(self, x):
+        if isinstance(x, np.ndarray):
+            x = x.item()
+
+        # numpy.bytes_ → decode
+        if isinstance(x, (bytes, np.bytes_)):
+            return x.decode("utf-8")
+
+        # numpy.str_ → convert to Python str
+        if isinstance(x, (str, np.str_)):
+            return str(x)
+
+        raise TypeError(f"Invalid prompt type {type(x)}; expected str-like")
+
     def __call__(self, data: DataDict) -> DataDict:
-        if (prompt := data.pop("prompt", None)) is None:
+        prompts = data.pop("prompt", None)
+        if prompts is None:
             raise ValueError("Prompt is required")
 
-        if self.discrete_state_input:
-            if (state := data.get("state", None)) is None:
-                raise ValueError("State is required.")
+        # Convert to list of Python str
+        if isinstance(prompts, (list, tuple)):
+            # Already a list
+            prompts_list = [self._to_py_str(p) for p in prompts]
+
+        elif isinstance(prompts, np.ndarray):
+            if prompts.ndim == 0:
+                # Single prompt
+                prompts_list = [self._to_py_str(prompts)]
+            elif prompts.ndim == 1:
+                # Batched prompts: shape (B,)
+                prompts_list = [self._to_py_str(p) for p in prompts]
+            else:
+                raise ValueError(f"Prompt array has invalid ndim: {prompts.ndim}")
+
         else:
-            state = None
+            # Single raw value (python str, bytes, etc.)
+            prompts_list = [self._to_py_str(prompts)]
+        # print(prompts_list)
+        # State handling
+        if self.discrete_state_input:
+            state = data.get("state", None)
+            if state is None:
+                raise ValueError("State is required.")
 
-        if not isinstance(prompt, str):
-            prompt = prompt.item()
+            if isinstance(state, np.ndarray) and state.ndim >= 2:
+                # Batched state: shape (B, ...)
+                if len(state) != len(prompts_list):
+                    raise ValueError(
+                        f"Batched state length {len(state)} != batched prompts length {len(prompts_list)}"
+                    )
+                states_list = [s for s in state]
+            else:
+                # Single state for all prompts
+                states_list = [state] * len(prompts_list)
+        else:
+            states_list = [None] * len(prompts_list)
 
-        tokens, token_masks = self.tokenizer.tokenize(prompt, state)
-        return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
+        # Tokenize each prompt
+        token_list = []
+        mask_list = []
+        for p, s in zip(prompts_list, states_list):
+            # print("P :", p , "s: ", s )
+            t, m = self.tokenizer.tokenize(p, s)
+            token_list.append(t)
+            mask_list.append(m)
 
+        # Stack or unwrap depending on batch size
+        if len(token_list) == 1:
+            tokens = token_list[0]
+            masks = mask_list[0]
+        else:
+            tokens = np.stack(token_list, axis=0)
+            masks = np.stack(mask_list, axis=0)
+
+        return {
+            **data,
+            "tokenized_prompt": tokens,
+            "tokenized_prompt_mask": masks,
+        }
+
+
+# @dataclasses.dataclass(frozen=True)
+# class TokenizeFASTInputs(DataTransformFn):
+#     tokenizer: _tokenizer.FASTTokenizer
+
+#     def __call__(self, data: DataDict) -> DataDict:
+#         if (prompt := data.pop("prompt", None)) is None:
+#             raise ValueError("Prompt is required")
+
+#         if not isinstance(prompt, str):
+#             prompt = prompt.item()
+
+#         state, actions = data["state"], data.get("actions")
+#         tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize(prompt, state, actions)
+#         return {
+#             **data,
+#             "tokenized_prompt": tokens,
+#             "tokenized_prompt_mask": token_mask,
+#             "token_ar_mask": ar_mask,
+#             "token_loss_mask": loss_mask,
+#         }
 
 @dataclasses.dataclass(frozen=True)
 class TokenizeFASTInputs(DataTransformFn):
     tokenizer: _tokenizer.FASTTokenizer
 
+    def _to_py_str(self, x):
+        """Convert bytes/numpy strings into python str."""
+        if isinstance(x, np.ndarray):
+            x = x.item()
+
+        if isinstance(x, (bytes, np.bytes_)):
+            return x.decode("utf-8")
+
+        if isinstance(x, (str, np.str_)):
+            return str(x)
+
+        raise TypeError(f"Invalid prompt type {type(x)}")
+
     def __call__(self, data: DataDict) -> DataDict:
-        if (prompt := data.pop("prompt", None)) is None:
+        prompts = data.pop("prompt", None)
+        if prompts is None:
             raise ValueError("Prompt is required")
+        # print(prompts)
+        # normalize to list of python strings
+        if isinstance(prompts, np.ndarray) and prompts.ndim == 1:
+            prompts_list = [self._to_py_str(p) for p in prompts]
+            # print("here")
+            # print(len(prompts_list))
+            # print(prompts_list[0])
+        else:
+            prompts_list = [self._to_py_str(prompts)]
 
-        if not isinstance(prompt, str):
-            prompt = prompt.item()
+        # Prepare state list
+        state = data["state"]
+        if isinstance(state, np.ndarray) and state.ndim >= 2:
+            states_list = [s for s in state]
+        else:
+            states_list = [state] * len(prompts_list)
 
-        state, actions = data["state"], data.get("actions")
-        tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize(prompt, state, actions)
+        # Prepare actions list
+        actions = data.get("actions", None)
+        if actions is None:
+            actions_list = [None] * len(prompts_list)
+        elif isinstance(actions, np.ndarray) and actions.ndim >= 3:
+            actions_list = [a for a in actions]
+        else:
+            actions_list = [actions] * len(prompts_list)
+
+        toks, masks, ar, loss = [], [], [], []
+
+        for p, s, a in zip(prompts_list, states_list, actions_list):
+            t, m, ar_m, loss_m = self.tokenizer.tokenize(p, s, a)
+            toks.append(t)
+            masks.append(m)
+            ar.append(ar_m)
+            loss.append(loss_m)
+
+        # # return stacked or single
+        # if len(toks) == 1:
+        #     return {
+        #         **data,
+        #         "tokenized_prompt": toks[0],
+        #         "tokenized_prompt_mask": masks[0],
+        #         "token_ar_mask": ar[0],
+        #         "token_loss_mask": loss[0],
+        #     }
+
         return {
             **data,
-            "tokenized_prompt": tokens,
-            "tokenized_prompt_mask": token_mask,
-            "token_ar_mask": ar_mask,
-            "token_loss_mask": loss_mask,
+            "tokenized_prompt": np.stack(toks),
+            "tokenized_prompt_mask": np.stack(masks),
+            "token_ar_mask": np.stack(ar),
+            "token_loss_mask": np.stack(loss),
         }
 
+
+# @dataclasses.dataclass(frozen=True)
+# class ExtractFASTActions(DataTransformFn):
+#     tokenizer: _tokenizer.FASTTokenizer
+#     action_horizon: int
+#     action_dim: int
+
+#     def __call__(self, data: DataDict) -> DataDict:
+#         if "actions" not in data:
+#             return data
+#         # Model outputs are saved in "actions", but for FAST models they represent tokens.
+#         tokens = data.pop("actions")
+#         actions = self.tokenizer.extract_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
+#         return {
+#             **data,
+#             "actions": actions,
+#         }
 
 @dataclasses.dataclass(frozen=True)
 class ExtractFASTActions(DataTransformFn):
@@ -295,16 +480,37 @@ class ExtractFASTActions(DataTransformFn):
     action_dim: int
 
     def __call__(self, data: DataDict) -> DataDict:
-        if "actions" not in data:
+        tokens = data.pop("actions", None)
+        if tokens is None:
             return data
-        # Model outputs are saved in "actions", but for FAST models they represent tokens.
-        tokens = data.pop("actions")
-        actions = self.tokenizer.extract_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
-        return {
-            **data,
-            "actions": actions,
-        }
+        # print("Action horizon is : ", self.action_horizon, "Action dimension is: ", self.action_dim)
+        if isinstance(tokens, np.ndarray) and tokens.ndim == 2 and tokens.shape[0] == 1:
+            # single sample
+            # print(tokens.shape)
+            actions = self.tokenizer.extract_actions(tokens.astype(np.int32),
+                                                     self.action_horizon,
+                                                     self.action_dim)
+            actions = actions[None, ...]
+            # print(actions.shape)
+        else:
+            # batched: shape (B, max_len)
+            actions_list = []
 
+            for i, t in enumerate(tokens):
+                t = t[None, :]
+                # print("t[{}].shape = {}".format(i, t.shape))
+                extracted = self.tokenizer.extract_actions(
+                    t.astype(np.int32),
+                    self.action_horizon,
+                    self.action_dim
+                )
+                # print("extracted[{}].shape = {}".format(i, extracted.shape))
+                actions_list.append(extracted)
+
+            actions = np.stack(actions_list)
+            # print("stacked actions shape =", actions.shape)
+
+        return {**data, "actions": actions}
 
 @dataclasses.dataclass(frozen=True)
 class PromptFromLeRobotTask(DataTransformFn):
@@ -426,7 +632,7 @@ def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.
     if current_dim < target_dim:
         pad_width = [(0, 0)] * len(x.shape)
         pad_width[axis] = (0, target_dim - current_dim)
-        return np.pad(x, pad_width, constant_values=value)
+        return np.pad(x, pad_width, mode='constant', constant_values=value)
     return x
 
 
