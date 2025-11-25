@@ -347,8 +347,8 @@ class TokenizePrompt(DataTransformFn):
 
         # Stack or unwrap depending on batch size
         if len(token_list) == 1:
-            tokens = token_list[0]
-            masks = mask_list[0]
+            tokens = token_list[0][None, :]      # (1, L)
+            masks = mask_list[0][None, :]        # (1, L)
         else:
             tokens = np.stack(token_list, axis=0)
             masks = np.stack(mask_list, axis=0)
