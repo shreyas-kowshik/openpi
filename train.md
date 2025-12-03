@@ -110,3 +110,44 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi0_libero_low_mem_fi
 ```
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/vis_alphareq.py pi05_vis_alphareq --exp-name=vis_alphareq-v1
 ```
+
+```
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/vis_alphareq.py pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1 --exp-name=vis_alphareq-v2
+```
+
+```
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/vis_alphareq.py pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1 --exp-name=pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1-v1
+```
+
+```
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/vis_alphareq.py pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1 --exp-name=pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1-v1
+```
+
+
+### Single task exps
+putbothmokapots
+
+```
+uv run scripts/compute_norm_stats.py --config-name pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1
+
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1 --exp-name=pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1.log
+```
+
+```
+uv run scripts/compute_norm_stats.py --config-name pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1
+
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1 --exp-name=pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1.log
+```
+
+LoRA FT Exps on single task
+```
+uv run scripts/compute_norm_stats.py --config-name pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2
+
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2 --exp-name=pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2.log
+```
+
+
+### Debug
+```
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1 --exp-name=debug-v1 --overwrite 2>&1 | tee logs/train/debug.log
+```

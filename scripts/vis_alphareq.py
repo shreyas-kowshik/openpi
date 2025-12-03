@@ -26,9 +26,7 @@ from typing import Any
 
 import etils.epath as epath
 import flax.nnx as nnx
-import flax.traverse_util as traverse_util
 import jax
-import jax.experimental
 import jax.numpy as jnp
 import numpy as np
 import scipy.linalg
@@ -37,13 +35,11 @@ import wandb
 
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
-import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.checkpoints as _checkpoints
 import openpi.training.config as _config
 import openpi.training.data_loader as _data_loader
 import openpi.training.sharding as sharding
-import openpi.training.utils as training_utils
-import openpi.training.weight_loaders as _weight_loaders
+import orbax.checkpoint as ocp
 
 
 def init_logging():
@@ -64,70 +60,27 @@ def init_logging():
     logger.setLevel(logging.INFO)
     logger.handlers[0].setFormatter(formatter)
 
+def _initialize_checkpoint_dir(
+    checkpoint_dir: epath.Path | str, *, keep_period: int | None, overwrite: bool, resume: bool
+) -> ocp.CheckpointManager:
+    checkpoint_dir = epath.Path(checkpoint_dir).resolve()
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
-    """Loads and validates the weights. Returns a loaded subset of the weights."""
-    loaded_params = loader.load(params_shape)
-    at.check_pytree_equality(expected=params_shape, got=loaded_params, check_shapes=True, check_dtypes=True)
-
-    # Remove jax.ShapeDtypeStruct from the loaded params. This makes sure that only the loaded params are returned.
-    return traverse_util.unflatten_dict(
-        {k: v for k, v in traverse_util.flatten_dict(loaded_params).items() if not isinstance(v, jax.ShapeDtypeStruct)}
+    mngr = ocp.CheckpointManager(
+        checkpoint_dir,
+        item_handlers={
+            "assets": _checkpoints.CallbackHandler(),
+            "params": ocp.PyTreeCheckpointHandler(),
+        },
+        options=ocp.CheckpointManagerOptions(
+            max_to_keep=1000000,
+            keep_period=keep_period,
+            create=False,
+            async_options=ocp.AsyncOptions(timeout_secs=7200),
+        ),
     )
 
-
-def init_model_only(
-    config: _config.TrainConfig, 
-    init_rng: at.KeyArrayLike, 
-    mesh: jax.sharding.Mesh
-) -> tuple[nnx.GraphDef, nnx.State]:
-    """Initialize only the model parameters without optimizer or training state."""
-    
-    def init(rng: at.KeyArrayLike, partial_params: at.Params | None = None) -> nnx.State:
-        rng, model_rng = jax.random.split(rng)
-        # Initialize the model (and its parameters)
-        model = config.model.create(model_rng)
-
-        # Merge the partial params into the model if provided
-        if partial_params is not None:
-            graphdef, state = nnx.split(model)
-            # This will produce an error if the partial params are not a subset of the state
-            state.replace_by_pure_dict(partial_params)
-            model = nnx.merge(graphdef, state)
-
-        params = nnx.state(model)
-        # Convert frozen params to bfloat16
-        params = nnx_utils.state_map(
-            params, 
-            config.freeze_filter, 
-            lambda p: p.replace(p.value.astype(jnp.bfloat16))
-        )
-
-        return params
-
-    # Get shape for sharding
-    params_shape = jax.eval_shape(init, init_rng)
-    
-    # Create sharding for params
-    params_sharding = sharding.fsdp_sharding(params_shape, mesh, log=True)
-
-    # Load pretrained weights
-    partial_params = _load_weights_and_validate(config.weight_loader, params_shape.to_pure_dict())
-    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-
-    # Initialize the params and mix in the partial params
-    params = jax.jit(
-        init,
-        donate_argnums=(1,),  # donate the partial params buffer
-        in_shardings=replicated_sharding,
-        out_shardings=params_sharding,
-    )(init_rng, partial_params)
-
-    # Create model to get the graphdef
-    model = config.model.create(jax.random.key(0))
-    model_def = nnx.graphdef(model)
-
-    return model_def, params
+    return mngr
 
 
 def extract_all_layer_activations(
@@ -272,63 +225,57 @@ def main(config: _config.TrainConfig):
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
 
     rng = jax.random.key(config.seed)
-    sample_rng, init_rng = jax.random.split(rng)
+    sample_rng = rng
 
     mesh = sharding.make_mesh(config.fsdp_devices)
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
-    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
     
     # Initialize wandb for logging (simplified for inference)
-    if config.wandb_enabled:
-        wandb.init(
-            name=f"{config.exp_name}_effective_rank",
-            config=dataclasses.asdict(config),
-            project=config.project_name,
-        )
-    else:
-        wandb.init(mode="disabled")
+    # if config.wandb_enabled:
+    #     wandb.init(
+    #         name=f"{config.exp_name}_effective_rank",
+    #         config=dataclasses.asdict(config),
+    #         project=config.project_name,
+    #     )
+    # else:
+    #     wandb.init(mode="disabled")
 
     # Create data loader
     logging.info("Creating data loader...")
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
-        shuffle=False,
+        shuffle=True,
     )
     data_iter = iter(data_loader)
     first_batch = next(data_iter)
     logging.info(f"Data loader initialized with batch size: {config.batch_size}")
 
-    # Initialize model (parameters only, no optimizer)
-    logging.info("Initializing model parameters...")
-    model_def, params = init_model_only(config, init_rng, mesh)
-    jax.block_until_ready(params)
-    logging.info("Model parameters initialized")
-
-    # Restore checkpoint if specified
-    if config.resume:
-        logging.info("Loading checkpoint parameters...")
-        checkpoint_manager = _checkpoints.create_checkpoint_manager(
-            config.checkpoint_dir,
-            keep_period=config.keep_period,
-        )
-        
-        # Load only the parameters from checkpoint
-        step = checkpoint_manager.latest_step()
-        if step is not None:
-            logging.info(f"Restoring parameters from step {step}...")
-            restored = checkpoint_manager.restore(
-                step,
-                items={"params": params},
-            )
-            params = restored["params"]
-            logging.info(f"Checkpoint parameters restored from step {step}")
-        else:
-            logging.warning("No checkpoint found, using initialized parameters")
-
-    # Merge model from graphdef and params
-    model = nnx.merge(model_def, params)
+    # Find the checkpoint step to load
+    logging.info(f"Looking for checkpoint in {config.checkpoint_dir}...")
+    checkpoint_manager = _initialize_checkpoint_dir(
+        config.checkpoint_dir, keep_period=None, overwrite=False, resume=False,
+    )
+    # step = checkpoint_manager.latest_step()
+    step = 750
+    if step is None:
+        raise ValueError(f"No checkpoint found in {config.checkpoint_dir}")
+    
+    checkpoint_path = epath.Path(config.checkpoint_dir) / str(step) / "params"
+    logging.info(f"Loading checkpoint from step {step}: {checkpoint_path}")
+    
+    # Use restore_params to load checkpoint with proper sharding
+    checkpoint_params = _model.restore_params(
+        checkpoint_path,
+        dtype=jnp.bfloat16,
+        restore_type=jax.Array,
+    )
+    logging.info("Checkpoint parameters loaded")
+    
+    # Load model with checkpoint parameters
+    model = config.model.load(checkpoint_params)
     model.eval()  # Set model to evaluation mode
+    logging.info("Model loaded successfully")
     
     # No JIT compilation needed for inference-only script with small number of batches
     # (JIT would require the model to be hashable, which is not the case)

@@ -153,3 +153,25 @@ python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lor
 
 python examples/libero/main.py --args.task_suite_name libero_10 --args.video_out_path data/libero/pi05_libero_lora_vision_fullft_action_v1.3k/ 2>&1 | tee logs/pi05_libero_lora_vision_fullft_action_v1.3k.log
 ```
+
+### Single task exps
+putbothmokapots
+
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1 --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1-v1/1500
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1.1.5k/ 2>&1 | tee logs/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1.1.5k.log
+```
+
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1 --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1-v1/1000
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1.1k/ 2>&1 | tee logs/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1.1k.log
+```
+
+```
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1 --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1-v1/2500
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1.2.5k/ 2>&1 | tee logs/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1.2.5k.log
+```
+

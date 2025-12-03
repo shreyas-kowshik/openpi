@@ -88,6 +88,13 @@ def init_train_state(
 ) -> tuple[training_utils.TrainState, Any]:
     tx = _optimizer.create_optimizer(config.optimizer, config.lr_schedule, weight_decay_mask=None)
 
+    # Wrap for gradietn accumulation
+    if config.gradient_accumulation_steps is not None:
+        assert isinstance(config.gradient_accumulation_steps, int), "Gradient accumulation steps must be an integer"
+        assert config.gradient_accumulation_steps > 0, "Gradient accumulation steps must be greater than 0"
+        tx = optax.MultiSteps(tx, every_k_schedule=config.gradient_accumulation_steps)
+        print(f"Using gradient accumulation with {config.gradient_accumulation_steps} steps")
+
     def init(rng: at.KeyArrayLike, partial_params: at.Params | None = None) -> training_utils.TrainState:
         rng, model_rng = jax.random.split(rng)
         # initialize the model (and its parameters).
@@ -229,6 +236,8 @@ def main(config: _config.TrainConfig):
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
+    # breakpoint()
+    # LOG: `batch` statistics #
 
     # Log images from first batch to sanity check.
     images_to_log = [
@@ -289,6 +298,7 @@ def main(config: _config.TrainConfig):
 
     infos = []
     for step in pbar:
+        # breakpoint()
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)

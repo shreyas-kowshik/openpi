@@ -5,6 +5,7 @@ will compute the mean and standard deviation of the data in the dataset and save
 to the config assets directory.
 """
 
+import logging
 import numpy as np
 import tqdm
 import tyro
@@ -20,6 +21,23 @@ class RemoveStrings(transforms.DataTransformFn):
     def __call__(self, x: dict) -> dict:
         return {k: v for k, v in x.items() if not np.issubdtype(np.asarray(v).dtype, np.str_)}
 
+def init_logging():
+    """Custom logging format for better readability."""
+    level_mapping = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
+
+    class CustomFormatter(logging.Formatter):
+        def format(self, record):
+            record.levelname = level_mapping.get(record.levelname, record.levelname)
+            return super().format(record)
+
+    formatter = CustomFormatter(
+        fmt="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)-80s (%(process)d:%(filename)s:%(lineno)s)",
+        datefmt="%H:%M:%S",
+    )
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.handlers[0].setFormatter(formatter)
 
 def create_torch_dataloader(
     data_config: _config.DataConfig,
@@ -87,6 +105,7 @@ def create_rlds_dataloader(
 
 
 def main(config_name: str, max_frames: int | None = None):
+    init_logging()
     config = _config.get_config(config_name)
     data_config = config.data.create(config.assets_dirs, config.model)
 

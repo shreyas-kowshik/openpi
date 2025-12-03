@@ -55,5 +55,20 @@ export HF_DATASETS_CACHE="/data/user_data/skowshik/huggingface"
 
 # XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_fullft_action_init_vision_v1 --exp-name=pi05_libero_lora_vision_fullft_action_init_vision_v1-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_fullft_action_init_vision_v1.log
 
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_fullft_action_v1 --exp-name=pi05_libero_lora_vision_fullft_action_v1-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_fullft_action_v1.log
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_fullft_action_v1 --exp-name=pi05_libero_lora_vision_fullft_action_v1-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_fullft_action_v1.log
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1 --exp-name=pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep29_v1.log
+
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1 --exp-name=pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep15_v1.log
+
+# uv run scripts/compute_norm_stats.py --config-name pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1 --exp-name=pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1.log
+
+# uv run scripts/compute_norm_stats.py --config-name pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1
+
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1 --exp-name=pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1.log
+
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2 --exp-name=pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1 --resume 2>&1 | tee logs/train/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2.log
 
