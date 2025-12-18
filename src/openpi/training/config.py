@@ -1107,10 +1107,12 @@ _CONFIGS = [
         data=CustomLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             assets=AssetsConfig(
-                assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/2000/assets/physical-intelligence/",
                 asset_id="libero",
             ),
-            base_config=DataConfig(prompt_from_task=False),
+            base_config=DataConfig(prompt_from_task=True),
             extra_delta_transform=False,
         ),
         batch_size=256,
@@ -1122,7 +1124,9 @@ _CONFIGS = [
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=None,
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/2000/params"),
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(
