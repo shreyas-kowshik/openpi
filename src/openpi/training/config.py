@@ -161,6 +161,65 @@ class ModelTransformFactory(GroupFactory):
                     ],
                 )
 
+@dataclasses.dataclass(frozen=True)
+class LiberoModelTransformFactory(GroupFactory):
+    """Creates model transforms for standard pi0 models."""
+
+    # If provided, will determine the default prompt that be used by the model.
+    default_prompt: str | None = None
+
+    def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
+        match model_config.model_type:
+            case _model.ModelType.PI0:
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(100, 100),
+                        _transforms.TokenizePrompt(
+                            _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                        ),
+                        _transforms.PadStatesAndActions(model_config.action_dim),
+                    ],
+                )
+            case _model.ModelType.PI05:
+                assert isinstance(model_config, pi0_config.Pi0Config)
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(100, 100),
+                        _transforms.TokenizePrompt(
+                            _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                            discrete_state_input=model_config.discrete_state_input,
+                        ),
+                        _transforms.PadStatesAndActions(model_config.action_dim),
+                    ],
+                )
+            case _model.ModelType.PI0_FAST:
+                tokenizer_cls = (
+                    _tokenizer.FASTTokenizer
+                    if model_config.fast_model_tokenizer is None
+                    else model_config.fast_model_tokenizer
+                )
+                tokenizer_kwargs = (
+                    {} if model_config.fast_model_tokenizer_kwargs is None else model_config.fast_model_tokenizer_kwargs
+                )
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(100, 100),
+                        _transforms.TokenizeFASTInputs(
+                            tokenizer_cls(model_config.max_token_len, **tokenizer_kwargs),
+                        ),
+                    ],
+                    outputs=[
+                        _transforms.ExtractFASTActions(
+                            tokenizer_cls(model_config.max_token_len, **tokenizer_kwargs),
+                            action_horizon=model_config.action_horizon,
+                            action_dim=model_config.action_dim,
+                        )
+                    ],
+                )
+
 
 @dataclasses.dataclass(frozen=True)
 class DataConfigFactory(abc.ABC):
@@ -519,7 +578,8 @@ class CustomLiberoDataConfig(DataConfigFactory):
 
         # Model transforms include things like tokenizing the prompt and action targets
         # You do not need to change anything here for your own dataset.
-        model_transforms = ModelTransformFactory()(model_config)
+        # model_transforms = ModelTransformFactory()(model_config)
+        model_transforms = LiberoModelTransformFactory()(model_config)
 
         # We return all data transforms for training and inference. No need to change anything here.
         return dataclasses.replace(
@@ -1126,7 +1186,7 @@ _CONFIGS = [
         ema_decay=None,
         checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
         # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/2000/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/2000/params"),
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=30_000,
         freeze_filter=pi0_config.Pi0Config(

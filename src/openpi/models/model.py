@@ -44,7 +44,8 @@ IMAGE_KEYS = (
 
 
 # This may need change if we release a small model.
-IMAGE_RESOLUTION = (224, 224)
+# IMAGE_RESOLUTION = (224, 224)
+IMAGE_RESOLUTION = (100, 100)
 
 
 # Data format
