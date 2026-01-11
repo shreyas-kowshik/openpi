@@ -175,3 +175,22 @@ python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lor
 python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1.2.5k/ 2>&1 | tee logs/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs32_v1.2.5k.log
 ```
 
+```
+LoRA FT Evals One Task
+
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2 --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/1000
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2.1k/ 2>&1 | tee logs/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2.1k.log
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/debug/ 2>&1 | tee logs/debug.log
+
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_4 --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_4/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_4-v1/1000
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_4.1k/ 2>&1 | tee logs/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_4.1k.log
+```
+
+### EXPO training debug ###
+python scripts/serve_policy.py policy:checkpoint --policy.config pi05_libero_custom_low_mem --policy.dir /data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/2000
+
+python examples/libero/main.py --args.task_suite_name libero_10 --args.task_name "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove" --args.video_out_path data/libero/debug/ 2>&1 | tee logs/debug.log
+
