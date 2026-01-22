@@ -19,12 +19,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-SOURCE_CONFIG_NAME = "pi0_libero"  # Config for checkpoint with vision params to transfer
-TARGET_CONFIG_NAME = "pi0_libero"  # Config for checkpoint to receive vision params
+SOURCE_CONFIG_NAME = "pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2"  # Config for checkpoint with vision params to transfer
+TARGET_CONFIG_NAME = "pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-DEBUG"  # Config for checkpoint to receive vision params
 
 # SOURCE_CHECKPOINT_DIR = "/data/user_data/skowshik/openpi_cache/pi0_libero_lora_moka_pots_task_ep20/checkpoints/pi0_libero_lora_moka_pots_task_ep20/pi0_libero_lora_moka_pots_task_ep20-v1/20000/"
-SOURCE_CHECKPOINT_DIR = "gs://openpi-assets/checkpoints/pi05_libero"
-TARGET_CHECKPOINT_DIR = "/data/user_data/skowshik/openpi_cache/pi0_libero_fullft_moka_pots_task_ep29/debug-v1/0/"
+SOURCE_CHECKPOINT_DIR = "/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/2000"
+TARGET_CHECKPOINT_DIR = "/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-DEBUG/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-DEBUG-v1/1/"
 
 OUTPUT_DIR = "/data/user_data/skowshik/openpi_cache/merged_checkpoint/"
 
@@ -66,6 +66,8 @@ def transfer_vision_params(source_params, target_params):
     # Flatten the parameter trees for easier manipulation
     source_flat = flatten_dict(source_params)
     target_flat = flatten_dict(target_params)
+
+    # breakpoint()
     
     # Identify and transfer PaliGemma parameters (both llm and img)
     transferred_count = 0

@@ -354,6 +354,17 @@ def create_torch_dataset(
     # Apply transforms after filtering
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+    
+
+    # breakpoint()
+    ep_ids = set()
+    for idx in range(len(dataset)):
+        sample = dataset[idx]
+        ep_ids.add(sample['episode_index'].item())
+    # logging.info(f"Number of unique episodes: {len(ep_ids)}")
+    # 10, 46, 51, 20, 23
+
+    breakpoint()
 
     return dataset
 
