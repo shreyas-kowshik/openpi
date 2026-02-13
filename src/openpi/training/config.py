@@ -564,7 +564,7 @@ class TrainConfig:
     data: DataConfigFactory = dataclasses.field(default_factory=FakeDataConfig)
 
     # Base directory for config assets (e.g., norm stats).
-    assets_base_dir: str = "/data/user_data/sreyasv/pi_exp/assets/"
+    assets_base_dir: str = "/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi0_libero/assets/"
     # Base directory for checkpoints.
     checkpoint_base_dir: str = "/data/user_data/sreyasv/pi_exp//checkpoints"
 
@@ -728,6 +728,12 @@ _CONFIGS = [
         # Also modify the DataConfig to use the new config you made for your dataset above.
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi0_libero/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
             base_config=DataConfig(
                 # This flag determines whether we load the prompt (i.e. the task instruction) from the
                 # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
@@ -738,11 +744,41 @@ _CONFIGS = [
         ),
         # Here you define which pre-trained checkpoint you want to load to initialize the model.
         # This should match the model config you chose above -- i.e. in this case we use the pi0 base model.
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
         # Check the base TrainConfig class for a full list of available hyperparameters.
         num_train_steps=30_000,
     ),
+    # TrainConfig(
+    #     # Change the name to reflect your model and dataset.
+    #     name="pi0_libero_all_freeze",
+    #     # Here you define the model config -- In this example we use pi0 as the model
+    #     # architecture and perform *full* finetuning. in the examples below we show how to modify
+    #     # this to perform *low-memory* (LORA) finetuning and use pi0-FAST as an alternative architecture.
+    #     model=pi0_config.Pi0Config(),
+    #     # Here you define the dataset you are training on. In this example we use the Libero
+    #     # dataset. For your own dataset, you can change the repo_id to point to your dataset.
+    #     # Also modify the DataConfig to use the new config you made for your dataset above.
+    #     data=LeRobotLiberoDataConfig(
+    #         repo_id="physical-intelligence/libero",
+    #         base_config=DataConfig(
+    #             # This flag determines whether we load the prompt (i.e. the task instruction) from the
+    #             # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
+    #             # a field called ``prompt`` in the input dict. The recommended setting is True.
+    #             prompt_from_task=True,
+    #         ),
+    #         extra_delta_transform=True,
+    #     ),
+    #     # Here you define which pre-trained checkpoint you want to load to initialize the model.
+    #     # This should match the model config you chose above -- i.e. in this case we use the pi0 base model.
+    #     checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+    #     weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+    #     # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
+    #     # Check the base TrainConfig class for a full list of available hyperparameters.
+    #     num_train_steps=30_000,
+    #     freeze_filter=pi0_config.Pi0Config().get_freeze_filter_full(),
+    # ),
     TrainConfig(
         name="pi0_libero_low_mem_finetune",
         # Here is an example of loading a pi0 model for LoRA fine-tuning.
@@ -1109,6 +1145,41 @@ _CONFIGS = [
             assets=AssetsConfig(
                 # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
                 # For custom one task case for now #
+                assets_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/500/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/500/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            pi05=True,
+            action_horizon=10, discrete_state_input=False,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_gradacc2_2k",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
                 assets_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/2000/assets/physical-intelligence/",
                 asset_id="libero",
             ),
@@ -1135,6 +1206,401 @@ _CONFIGS = [
             pi05=True,
             action_horizon=10, discrete_state_input=False,
         ).get_freeze_filter(),
+    ),
+    # TrainConfig(
+    #     name="pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v1_icml",
+    #     model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora", pi05=True,
+    #                                 action_horizon=10, discrete_state_input=True),
+    #     data=LeRobotLiberoDataConfig(
+    #         repo_id="physical-intelligence/libero",
+    #         base_config=DataConfig(
+    #             prompt_from_task=True,
+    #             filter_prompt="put both moka pots on the stove",
+    #             num_episodes=5,
+    #         ),
+    #         extra_delta_transform=False,
+    #     ),
+    #     # Specify custom paths #
+    #     # Base directory for config assets (e.g., norm stats).
+    #     assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+    #     # Base directory for checkpoints.
+    #     checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+    #     weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    #     num_train_steps=100_000,
+    #     # L1 loss logging interval
+    #     # By default, we don't log L1 loss
+    #     # Keep a little large as for a diffusion policy this will run denoising
+    #     action_l1_loss_interval=200,
+    #     save_interval=250,
+    #     keep_period=250, # Keep all checkpoints if matches `save_interval`
+    #     # Log action dimension explicitly
+    #     action_dim=7, # 7 for libero
+    #     lr_schedule=_optimizer.CosineDecaySchedule(
+    #         warmup_steps=50,
+    #         peak_lr=2.5e-5,
+    #         decay_steps=100_000,
+    #         decay_lr=2.5e-6,
+    #     ),
+    #     batch_size=128,
+    #     # gradient_accumulation_steps=2,
+    #     log_interval=50,
+    #     # The freeze filter defines which parameters should be frozen during training.
+    #     # We have a convenience function in the model config that returns the default freeze filter
+    #     # for the given model config for LoRA finetuning. Just make sure it matches the model config
+    #     # you chose above.
+    #     freeze_filter=pi0_config.Pi0Config(
+    #         paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora", pi05=True
+    #     ).get_freeze_filter(),
+    #     # Turn off EMA for LoRA finetuning.
+    #     # ema_decay=None,
+    #     num_workers=0,
+    #     # wandb_enabled=False,
+    # ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-vision_lora_trained_init/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-vision_lora_trained_init-v1/4000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-vision_lora_trained_init/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-vision_lora_trained_init-v1/4000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_v2",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/6000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/6000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_v3",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_discrete_state_input_False_4k",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_discrete_state_input_False_4k_yellow_white_mug",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/hf_cache/models/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml-v1/4000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/hf_cache/models/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml-v1/4000/params/"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_discrete_state_input_False_8k_yellow_white_mug",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/hf_cache/models/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml-v1/8000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/hf_cache/models/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml-v1/8000/params/"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_discrete_state_input_False_4k_vision_init_fullft_action",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/hf_cache/models/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml_init_vision_full_data_trained/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml_init_vision_full_data_trained-v1/1000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/hf_cache/models/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml_init_vision_full_data_trained/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml_init_vision_full_data_trained-v1/1000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_discrete_state_input_False_4k_dsrl",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/assets/physical-intelligence/",
+                asset_id="physical-intelligence/libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/user_data/skowshik/openpi_cache/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    ### Pi0 Libero Base All Freeze ###
+    TrainConfig(
+        name="pi0_libero_all_freeze",
+        model=pi0_config.Pi0Config(),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi0_libero/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        # batch_size=256,
+        # lr_schedule=_optimizer.CosineDecaySchedule(
+        #     warmup_steps=300,
+        #     peak_lr=5e-5,
+        #     decay_steps=30_000,
+        #     decay_lr=5e-5,
+        # ),
+        # optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        # ema_decay=None,
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_libero/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config().get_freeze_filter_full(),
+    ),
+    TrainConfig(
+        # Change the name to reflect your model and dataset.
+        name="pi0_libero_debug",
+        # Here you define the model config -- In this example we use pi0 as the model
+        # architecture and perform *full* finetuning. in the examples below we show how to modify
+        # this to perform *low-memory* (LORA) finetuning and use pi0-FAST as an alternative architecture.
+        model=pi0_config.Pi0Config(),
+        # Here you define the dataset you are training on. In this example we use the Libero
+        # dataset. For your own dataset, you can change the repo_id to point to your dataset.
+        # Also modify the DataConfig to use the new config you made for your dataset above.
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="/data/hf_cache/pi-models/openpi/openpi-assets/checkpoints/pi0_libero/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(
+                # This flag determines whether we load the prompt (i.e. the task instruction) from the
+                # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
+                # a field called ``prompt`` in the input dict. The recommended setting is True.
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        # Here you define which pre-trained checkpoint you want to load to initialize the model.
+        # This should match the model config you chose above -- i.e. in this case we use the pi0 base model.
+        checkpoint_base_dir="/data/user_data/skowshik/openpi_cache/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
+        # Check the base TrainConfig class for a full list of available hyperparameters.
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config().get_freeze_filter_full()
     ),
 ]
 
