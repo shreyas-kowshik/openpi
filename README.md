@@ -321,3 +321,11 @@ We will collect common issues and their solutions here. If you encounter an issu
 | Import errors when running examples       | Make sure you've installed all dependencies with `uv sync`. Some examples may have additional requirements listed in their READMEs.                    |
 | Action dimensions mismatch                | Verify your data processing transforms match the expected input/output dimensions of your robot. Check the action space definitions in your policy classes.                                  |
 | Diverging training loss                            | Check the `q01`, `q99`, and `std` values in `norm_stats.json` for your dataset. Certain dimensions that are rarely used can end up with very small `q01`, `q99`, or `std` values, leading to huge states and actions after normalization. You can manually adjust the norm stats as a workaround. |
+
+### Dump Filtered Data
+```
+python scripts/dump_filtered_data.py --num_episodes 1 --output_dir data_dumps --filter_prompt "put both moka pots on the stove"
+
+python scripts/dump_filtered_data.py --num_episodes 5 --output_dir data_dumps --filter_prompt "pick up the book and place it in the back compartment of the caddy"
+```
+

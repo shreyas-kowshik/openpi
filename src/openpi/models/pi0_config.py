@@ -131,3 +131,35 @@ class Pi0Config(_model.BaseModelConfig):
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)
+    
+    def get_freeze_filter_full(self) -> nnx.filterlib.Filter:
+        return nnx_utils.PathRegex(".*llm.*")
+    
+    def get_freeze_filter_action_expert_lora_vision(self) -> nnx.filterlib.Filter:
+        """Freeze everything except SigLIP encoder and vision LoRA adapters.
+        
+        Trains:
+        - SigLIP encoder (.*img.*)
+        - Vision LoRA adapters (.*lora.* in .*llm.* but NOT in .*llm.*_1.*)
+        
+        Freezes:
+        - Main vision transformer weights (.*llm.* non-LoRA)
+        - Action expert (.*llm.*_1.*)
+        - Action projections (.*action_in_proj.*, .*action_out_proj.*)
+        - Time embeddings (.*time_mlp_in.*, .*time_mlp_out.*)
+        """
+        return nnx.Any(
+            # Explicitly freeze these layers
+            nnx_utils.PathRegex(".*action_in_proj.*"),
+            nnx_utils.PathRegex(".*action_out_proj.*"),
+            nnx_utils.PathRegex(".*time_mlp_in.*"),
+            nnx_utils.PathRegex(".*time_mlp_out.*"),
+            # General freeze logic
+            nnx.All(
+                nnx.Not(nnx_utils.PathRegex(".*img.*")),  # Not SigLIP encoder
+                nnx.Any(
+                    nnx.Not(nnx_utils.PathRegex(".*lora.*")),  # Either not LoRA at all
+                    nnx_utils.PathRegex(".*llm.*_1.*"),  # Or is in action expert (freeze action expert LoRA)
+                )
+            )
+        )

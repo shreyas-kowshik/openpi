@@ -5,6 +5,7 @@ import os
 import typing
 from typing import Literal, Protocol, SupportsIndex, TypeVar
 
+import h5py
 import jax
 import jax.numpy as jnp
 import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
@@ -64,6 +65,7 @@ class FilteredDataset(Dataset[T_co]):
         lerobot_dataset=None,
         dataset_meta=None,
         num_episodes: int = -1,
+        exclude_filter_prompt: bool = False,
     ):
         """Initialize filtered dataset.
         
@@ -73,17 +75,20 @@ class FilteredDataset(Dataset[T_co]):
             lerobot_dataset: Optional raw LeRobot dataset for fast filtering
             dataset_meta: Optional LeRobotDatasetMetadata for fast filtering
             num_episodes: Number of episodes to keep. -1 means keep all, positive value limits episodes.
+            exclude_filter_prompt: If True, exclude samples matching filter_prompt instead of including them
         """
         self._dataset = dataset
         self._filter_prompt = filter_prompt
         self._lerobot_dataset = lerobot_dataset
         self._dataset_meta = dataset_meta
         self._num_episodes = num_episodes
+        self._exclude_filter_prompt = exclude_filter_prompt
         self._valid_indices = self._build_index()
     
     def _build_index(self) -> list[int]:
         """Build an index of valid samples that match the filter prompt."""
-        logging.info(f"Building index for prompt filter: '{self._filter_prompt}'")
+        filter_type = "exclude" if self._exclude_filter_prompt else "include"
+        logging.info(f"Building index for prompt filter ({filter_type}): '{self._filter_prompt}'")
         logging.info(f"Dataset length: {len(self._dataset)}")
         
         # Try fast path using metadata
@@ -91,7 +96,7 @@ class FilteredDataset(Dataset[T_co]):
         if valid_indices is not None:
             logging.info(
                 f"Filtered dataset (fast): {len(valid_indices)} / {len(self._dataset)} samples "
-                f"match prompt '{self._filter_prompt}'"
+                f"({filter_type} prompt '{self._filter_prompt}')"
             )
         else:
             # Fallback to slow path
@@ -104,12 +109,13 @@ class FilteredDataset(Dataset[T_co]):
                 sample = self._dataset[i]
                 sample_prompt = sample.get('task', sample.get('prompt', None))
                 
-                if sample_prompt == self._filter_prompt:
+                matches = (sample_prompt == self._filter_prompt)
+                if (matches and not self._exclude_filter_prompt) or (not matches and self._exclude_filter_prompt):
                     valid_indices.append(i)
             
             logging.info(
                 f"Filtered dataset: {len(valid_indices)} / {len(self._dataset)} samples "
-                f"match prompt '{self._filter_prompt}'"
+                f"({filter_type} prompt '{self._filter_prompt}')"
             )
         
         return valid_indices
@@ -149,19 +155,27 @@ class FilteredDataset(Dataset[T_co]):
             episode_indices = hf_dataset['episode_index']
             tasks_map = self._dataset_meta.tasks
             
-            # First pass: find all samples matching the prompt and track unique episodes
+            # First pass: find all samples matching the prompt and track unique episodes per task
             valid_indices = []
             episodes_seen = []  # Track episode order
             episodes_set = set()  # For fast lookup
+            task_episode_counts = {}  # Track episodes per task
             
             for i, (task_idx, ep_idx) in enumerate(zip(task_indices, episode_indices)):
                 if i % 10000 == 0 and i > 0:
                     logging.info(f"  Processed {i} / {len(task_indices)} samples")
                 
                 task_prompt = tasks_map.get(int(task_idx))
-                if task_prompt == self._filter_prompt:
-                    ep_idx_int = int(ep_idx)
-                    
+                task_idx_int = int(task_idx)
+                ep_idx_int = int(ep_idx)
+                
+                # Track episodes per task
+                if task_idx_int not in task_episode_counts:
+                    task_episode_counts[task_idx_int] = set()
+                task_episode_counts[task_idx_int].add(ep_idx_int)
+                
+                matches = (task_prompt == self._filter_prompt)
+                if (matches and not self._exclude_filter_prompt) or (not matches and self._exclude_filter_prompt):
                     # Track episodes in order
                     if ep_idx_int not in episodes_set:
                         episodes_seen.append(ep_idx_int)
@@ -169,8 +183,19 @@ class FilteredDataset(Dataset[T_co]):
                     
                     valid_indices.append(i)
             
-            # Limit by number of episodes if specified
-            if self._num_episodes > 0 and len(episodes_seen) > self._num_episodes:
+            # Print all tasks loaded with episode counts
+            logging.info("\n=== Tasks Loaded ===")
+            total_episodes = 0
+            for task_idx in sorted(task_episode_counts.keys()):
+                task_name = tasks_map.get(task_idx, f"Unknown_{task_idx}")
+                num_eps = len(task_episode_counts[task_idx])
+                total_episodes += num_eps
+                logging.info(f"  Task '{task_name}': {num_eps} episodes")
+            logging.info(f"Total episodes loaded: {total_episodes}")
+            logging.info("=" * 50)
+            
+            # Limit by number of episodes if specified (only when not excluding)
+            if not self._exclude_filter_prompt and self._num_episodes > 0 and len(episodes_seen) > self._num_episodes:
                 # Keep only samples from the first N episodes
                 episodes_to_keep = set(episodes_seen[:self._num_episodes])
                 
@@ -282,6 +307,102 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
+class LiberoProHDF5Dataset(Dataset):
+    """Dataset that reads directly from a LIBERO-PRO HDF5 demo file.
+
+    Returns items with the same keys as the ``physical-intelligence/libero`` LeRobot dataset so
+    they can be combined with LeRobot samples and pass through the same repack / data transforms:
+      - image:       main camera    (H, W, 3) uint8
+      - wrist_image: wrist camera   (H, W, 3) uint8
+      - state:       ee_states (6,) concat gripper_states (2,) → (8,) float32
+      - actions:     (action_horizon, 7) float32, last action padded at episode end
+      - prompt:      task language instruction string
+    """
+
+    def __init__(self, hdf5_path: str, action_horizon: int, num_episodes: int = -1):
+        import json as _json
+
+        self._action_horizon = action_horizon
+        self._samples: list[tuple[str, int]] = []  # (demo_key, timestep_idx)
+        self._data: dict = {}  # demo_key -> {arrays}
+
+        with h5py.File(hdf5_path, "r") as f:
+            raw_prompt = f["data"].attrs.get("problem_info", "")
+            try:
+                self._prompt = _json.loads(raw_prompt).get("language_instruction", "")
+            except Exception:
+                self._prompt = str(raw_prompt)
+
+            demo_keys = sorted(f["data"].keys())
+            if num_episodes > 0:
+                demo_keys = demo_keys[:num_episodes]
+
+            logging.info(f"LiberoProHDF5Dataset: loading {len(demo_keys)} episodes from {hdf5_path}")
+
+            for demo_key in demo_keys:
+                demo = f["data"][demo_key]
+                T = demo["actions"].shape[0]
+                self._data[demo_key] = {
+                    "agentview_rgb": demo["obs/agentview_rgb"][:],                          # (T, H, W, 3) uint8
+                    "eye_in_hand_rgb": demo["obs/eye_in_hand_rgb"][:],                      # (T, H, W, 3) uint8
+                    "ee_states": demo["obs/ee_states"][:].astype(np.float32),              # (T, 6)
+                    "gripper_states": demo["obs/gripper_states"][:].astype(np.float32),    # (T, 2)
+                    "actions": demo["actions"][:].astype(np.float32),                      # (T, 7)
+                }
+                for t in range(T):
+                    self._samples.append((demo_key, t))
+
+        logging.info(
+            f"LiberoProHDF5Dataset: {len(demo_keys)} episodes, {len(self._samples)} timestep samples, "
+            f"prompt='{self._prompt}'"
+        )
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    def __getitem__(self, index: SupportsIndex) -> dict:
+        demo_key, t = self._samples[index.__index__()]
+        data = self._data[demo_key]
+        T = data["actions"].shape[0]
+
+        # Build action chunk [t, t+action_horizon); pad with last action at episode end.
+        actions = np.empty((self._action_horizon, 7), dtype=np.float32)
+        for i in range(self._action_horizon):
+            actions[i] = data["actions"][min(t + i, T - 1)]
+
+        state = np.concatenate([data["ee_states"][t], data["gripper_states"][t]], axis=-1)  # (8,)
+
+        # Keys match the physical-intelligence/libero LeRobot dataset so the same repack
+        # transform (image→observation/image, etc.) works for both data sources.
+        return {
+            "image": data["agentview_rgb"][t],
+            "wrist_image": data["eye_in_hand_rgb"][t],
+            "state": state,
+            "actions": actions,
+            "prompt": self._prompt,
+        }
+
+
+class ConcatDataset(Dataset):
+    """Concatenates multiple datasets into one."""
+
+    def __init__(self, datasets: Sequence[Dataset]):
+        self._datasets = list(datasets)
+        self._lengths = [len(d) for d in self._datasets]
+        self._total = sum(self._lengths)
+
+    def __len__(self) -> int:
+        return self._total
+
+    def __getitem__(self, index: SupportsIndex) -> dict:
+        idx = index.__index__()
+        for dataset, length in zip(self._datasets, self._lengths):
+            if idx < length:
+                return dataset[idx]
+            idx -= length
+        raise IndexError(f"Index {index.__index__()} out of range for ConcatDataset of size {self._total}")
+
+
 def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
@@ -349,22 +470,48 @@ def create_torch_dataset(
             lerobot_dataset=lerobot_ds,
             dataset_meta=dataset_meta,
             num_episodes=data_config.num_episodes,
+            exclude_filter_prompt=data_config.exclude_filter_prompt,
         )
     
     # Apply transforms after filtering
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
-    
 
-    # breakpoint()
-    ep_ids = set()
-    for idx in range(len(dataset)):
-        sample = dataset[idx]
-        ep_ids.add(sample['episode_index'].item())
-    # logging.info(f"Number of unique episodes: {len(ep_ids)}")
-    # 10, 46, 51, 20, 23
-
-    breakpoint()
+    # If an HDF5 path is also specified, create an additional dataset from it and concatenate.
+    hdf5_path = getattr(data_config, "hdf5_path", None)
+    if hdf5_path is not None:
+        hdf5_dataset = LiberoProHDF5Dataset(hdf5_path, action_horizon, data_config.num_episodes)
+        logging.info(
+            f"Combining LeRobot dataset ({len(dataset)} samples) with "
+            f"HDF5 dataset ({len(hdf5_dataset)} samples) from {hdf5_path}"
+        )
+        # SANITY-CHECK BREAKPOINT ─────────────────────────────────────────────
+        # At this point both raw datasets exist before concatenation.
+        # Useful expressions to inspect in pdb:
+        #
+        #   lr = dataset[0]          ; hdf = hdf5_dataset[0]
+        #   lr_last = dataset[-1]    ; hdf_last = hdf5_dataset[-1]
+        #
+        #   # Shapes must match:
+        #   lr['actions'].shape      # → (action_horizon, 7)
+        #   hdf['actions'].shape     # → (action_horizon, 7)
+        #   lr['image'].shape        # → (H, W, 3)
+        #   hdf['image'].shape       # → (H, W, 3)
+        #   lr['state'].shape        # → (8,)
+        #   hdf['state'].shape       # → (8,)
+        #
+        #   # Dtypes (LeRobot may return torch tensors; HDF5 returns np.float32):
+        #   type(lr['actions']),  lr['actions'].dtype
+        #   type(hdf['actions']), hdf['actions'].dtype
+        #
+        #   # Boundary padding – both datasets clamp to last action at episode end:
+        #   lr_last['actions'][-3:]   # last 3 rows should equal lr_last['actions'][-1]
+        #   hdf_last['actions'][-3:]  # same expectation for HDF5
+        #
+        #   # Prompt strings:
+        #   lr['prompt'], hdf['prompt']
+        breakpoint()  # ← remove after sanity check
+        dataset = ConcatDataset([dataset, hdf5_dataset])
 
     return dataset
 

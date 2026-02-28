@@ -58,12 +58,13 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
     if resuming:
         run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name)
+        wandb.init(id=run_id, resume="must", project=config.project_name, entity=config.wandb_entity)
     else:
         wandb.init(
             name=config.exp_name,
             config=dataclasses.asdict(config),
             project=config.project_name,
+            entity=config.wandb_entity,
         )
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 
@@ -192,12 +193,28 @@ def train_step(
         ),
     )
 
+    # Filter for vision and action expert layers
+    # Vision params: SigLIP encoder + vision transformer (but NOT action expert)
+    vision_params = kernel_params.filter(
+        nnx.Any(
+            nnx_utils.PathRegex(".*img.*"),  # SigLIP encoder
+            nnx.All(
+                nnx_utils.PathRegex(".*llm.*"),  # Vision transformer
+                nnx.Not(nnx_utils.PathRegex(".*llm.*_1.*")),  # But NOT action expert
+            )
+        )
+    )
+    action_expert_params = kernel_params.filter(nnx_utils.PathRegex(".*llm.*_1.*"))
+
+
     # jax.debug.breakpoint()
     info = {
         "loss": loss,
         "grad_norm": optax.global_norm(grads),
         "grad_norm_action_out_proj": optax.global_norm(grads.filter(nnx_utils.PathRegex(".*action_out_proj.*"))),
         "param_norm": optax.global_norm(kernel_params),
+        "param_norm_vision": optax.global_norm(vision_params),
+        "param_norm_action_expert": optax.global_norm(action_expert_params),
     }
     return new_state, info
 
@@ -236,7 +253,6 @@ def main(config: _config.TrainConfig):
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
-    # breakpoint()
     # LOG: `batch` statistics #
 
     # Log images from first batch to sanity check.
@@ -305,7 +321,10 @@ def main(config: _config.TrainConfig):
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+            info_str = ", ".join(
+                f"{k}={v:.4f}" if isinstance(v, (int, float, np.number)) else f"{k}={v}" 
+                for k, v in reduced_info.items()
+            )
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
