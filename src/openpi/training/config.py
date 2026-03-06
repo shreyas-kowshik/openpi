@@ -103,6 +103,9 @@ class DataConfig:
     exclude_filter_prompt: bool = False
     # Path to an HDF5 file for direct loading (bypasses LeRobot dataset). Used by LiberoProHDF5DataConfig.
     hdf5_path: str | None = None
+    # Number of HDF5 episodes to load. -1 means load all. Independent from num_episodes which
+    # controls LeRobot episode filtering.
+    hdf5_num_episodes: int = -1
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -465,12 +468,15 @@ class LiberoProHDF5DataConfig(LeRobotLiberoDataConfig):
     # Path to the LIBERO-PRO HDF5 demo file.  When set, ``create_torch_dataset`` will also load
     # this file and concatenate its samples with the LeRobot dataset.
     hdf5_path: str = tyro.MISSING
+    # Number of HDF5 episodes to load. -1 means load all. Independent from base_config.num_episodes
+    # which controls how many LeRobot episodes are kept after filtering.
+    hdf5_num_episodes: int = -1
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         # Delegate to parent to get the full LeRobot transform pipeline, then inject hdf5_path.
         base = super().create(assets_dirs, model_config)
-        return dataclasses.replace(base, hdf5_path=self.hdf5_path)
+        return dataclasses.replace(base, hdf5_path=self.hdf5_path, hdf5_num_episodes=self.hdf5_num_episodes)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -653,6 +659,11 @@ class TrainConfig:
 
     # Gradient accumulation steps, can be int or None
     gradient_accumulation_steps: int | None = None
+
+    # When True, compute_norm_stats.py will enforce a minimum q99-q01 range per dimension.
+    # Useful when training on very few episodes where some dimensions (e.g. gripper) may be
+    # nearly constant, causing quantile normalization to blow up.
+    enforce_min_quantile_range: bool = False
 
     @property
     def assets_dirs(self) -> pathlib.Path:
@@ -1911,7 +1922,7 @@ _CONFIGS = [
     ),
     # 1 Episode with FullFT Action + LoRA Vision : Book Caddy Task #
     TrainConfig(
-        name="pi05_libero_lora_vision_fullft_action_placebookincaddy_task_ep1_bs32_v2_icml",
+        name="pi05_libero_lora_vision_fullft_action_placebookincaddy_task_ep1_bs32_v2_icml_v2",
         model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
                                     action_horizon=10, discrete_state_input=False),
         data=LeRobotLiberoDataConfig(
@@ -1958,6 +1969,7 @@ _CONFIGS = [
         # ema_decay=None,
         num_workers=0,
         # wandb_enabled=False,
+        enforce_min_quantile_range=True,
     ),
     # 1 Episode from LeRobot + 1 Episode from LIBERO-PRO HDF5 : Book Caddy Task #
     TrainConfig(
@@ -1993,7 +2005,175 @@ _CONFIGS = [
             decay_steps=100_000,
             decay_lr=2.5e-6,
         ),
-        batch_size=16,
+        batch_size=64,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+    ),
+    # 1 Episode from LeRobot + 1 Episode from LIBERO-PRO HDF5 : Book Caddy Task #
+    TrainConfig(
+        name="pi05_libero_lora_vision_fullft_action_placebookincaddy_task_ep1_bs32_custom_data_source_libero_pro_v2",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LiberoProHDF5DataConfig(
+            repo_id="physical-intelligence/libero",
+            hdf5_path="/data/hf_cache/datasets/LIBERO/LIBERO-PRO/data/book-caddy/book_caddy_demo.hdf5",
+            # hdf5_num_episodes=8,
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="pick up the book and place it in the back compartment of the caddy",
+                num_episodes=8,
+            ),
+            extra_delta_transform=False,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/hf_cache/models/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        # L1 loss logging interval
+        action_l1_loss_interval=500,
+        save_interval=1000,
+        keep_period=1000,
+        # Log action dimension explicitly
+        action_dim=7,  # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=64,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+    ),
+    # 1 Episode from LeRobot + 1 Episode from LIBERO-PRO HDF5 : Book Caddy Task #
+    TrainConfig(
+        name="pi05_libero_lora_vision_fullft_action_placebookincaddy_task_ep1_bs32_custom_data_source_libero_pro_v3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LiberoProHDF5DataConfig(
+            repo_id="physical-intelligence/libero",
+            hdf5_path="/data/hf_cache/datasets/LIBERO/LIBERO-PRO/data/book-caddy/book_caddy_demo.hdf5",
+            hdf5_num_episodes=8,
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="pick up the book and place it in the back compartment of the caddy",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/hf_cache/models/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        # L1 loss logging interval
+        action_l1_loss_interval=500,
+        save_interval=1000,
+        keep_period=1000,
+        # Log action dimension explicitly
+        action_dim=7,  # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=64,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+    ),
+    # 1 Episode from LeRobot + 1 Episode from LIBERO-PRO HDF5 : Book Caddy Task #
+    TrainConfig(
+        name="pi05_libero_lora_vision_fullft_action_placebookincaddy_task_ep1_bs32_custom_data_source_libero_pro_v4_ep16",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LiberoProHDF5DataConfig(
+            repo_id="physical-intelligence/libero",
+            hdf5_path="/home/skowshik/vla/codebase/openpi/demos_extracted/book_caddy_demo_demo_16.hdf5",
+            hdf5_num_episodes=1,
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="pick up the book and place it in the back compartment of the caddy",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/hf_cache/models/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        # L1 loss logging interval
+        action_l1_loss_interval=500,
+        save_interval=1000,
+        keep_period=1000,
+        # Log action dimension explicitly
+        action_dim=7,  # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=64,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+    ),
+    # 1 Episode from LeRobot + 1 Episode from LIBERO-PRO HDF5 : Book Caddy Task #
+    TrainConfig(
+        name="pi05_libero_lora_vision_fullft_action_placebookincaddy_task_ep1_bs32_custom_data_source_libero_pro_v5_3pro_episodes",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LiberoProHDF5DataConfig(
+            repo_id="physical-intelligence/libero",
+            hdf5_path="/data/hf_cache/datasets/LIBERO/LIBERO-PRO/data/book-caddy/book_caddy_demo.hdf5",
+            hdf5_num_episodes=3,
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="pick up the book and place it in the back compartment of the caddy",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        # Specify custom paths #
+        # Base directory for config assets (e.g., norm stats).
+        assets_base_dir="/data/user_data/skowshik/openpi_cache/libero_custom_lora_ft/assets",
+        # Base directory for checkpoints.
+        checkpoint_base_dir="/data/hf_cache/models/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        # L1 loss logging interval
+        action_l1_loss_interval=500,
+        save_interval=1000,
+        keep_period=1000,
+        # Log action dimension explicitly
+        action_dim=7,  # 7 for libero
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=64,
         log_interval=50,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True

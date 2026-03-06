@@ -21,6 +21,12 @@ class RemoveStrings(transforms.DataTransformFn):
     def __call__(self, x: dict) -> dict:
         return {k: v for k, v in x.items() if not np.issubdtype(np.asarray(v).dtype, np.str_)}
 
+
+class RemoveImages(transforms.DataTransformFn):
+    """Remove image-related keys that aren't needed for norm stats and may have inconsistent shapes."""
+    def __call__(self, x: dict) -> dict:
+        return {k: v for k, v in x.items() if k not in ("image", "image_mask")}
+
 def init_logging():
     """Custom logging format for better readability."""
     level_mapping = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
@@ -55,8 +61,10 @@ def create_torch_dataloader(
         [
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
-            # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
+            # Remove strings and images since they are not needed for norm stats.
+            # Images may also have inconsistent shapes across data sources (e.g. LeRobot 256x256 vs HDF5 128x128).
             RemoveStrings(),
+            RemoveImages(),
         ],
     )
     if max_frames is not None and max_frames < len(dataset):
@@ -87,8 +95,10 @@ def create_rlds_dataloader(
         [
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
-            # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
+            # Remove strings and images since they are not needed for norm stats.
+            # Images may also have inconsistent shapes across data sources (e.g. LeRobot 256x256 vs HDF5 128x128).
             RemoveStrings(),
+            RemoveImages(),
         ],
         is_batched=True,
     )
@@ -126,6 +136,28 @@ def main(config_name: str, max_frames: int | None = None):
             stats[key].update(np.asarray(batch[key]))
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
+
+    if config.enforce_min_quantile_range:
+        # Fix gripper action dim (last dim of actions) if its range has collapsed.
+        # In LIBERO, gripper actions range from -1 (close) to 1 (open).  When training
+        # on very few episodes the gripper may barely move, giving a near-zero range
+        # that blows up quantile normalization.
+        GRIPPER_Q01 = -1.0
+        GRIPPER_Q99 = 1.0
+        GRIPPER_RANGE_THRESHOLD = 0.5  # healthy range is ~2.0; flag anything far below
+        if "actions" in norm_stats:
+            ns = norm_stats["actions"]
+            if ns.q01 is not None and ns.q99 is not None:
+                gripper_dim = ns.q01.shape[-1] - 1  # last dim
+                gripper_range = ns.q99[gripper_dim] - ns.q01[gripper_dim]
+                if gripper_range < GRIPPER_RANGE_THRESHOLD:
+                    logging.warning(
+                        f"Gripper action (dim {gripper_dim}) has collapsed range: "
+                        f"q01={ns.q01[gripper_dim]:.4f}, q99={ns.q99[gripper_dim]:.4f} "
+                        f"(range={gripper_range:.4f}). Overriding to [{GRIPPER_Q01}, {GRIPPER_Q99}]."
+                    )
+                    ns.q01[gripper_dim] = GRIPPER_Q01
+                    ns.q99[gripper_dim] = GRIPPER_Q99
 
     output_path = config.assets_dirs / data_config.repo_id
     print(f"Writing stats to: {output_path}")

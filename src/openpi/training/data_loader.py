@@ -372,11 +372,15 @@ class LiberoProHDF5Dataset(Dataset):
 
         state = np.concatenate([data["ee_states"][t], data["gripper_states"][t]], axis=-1)  # (8,)
 
+        # LIBERO-PRO HDF5 images are stored vertically and horizontally flipped; flip both axes to match LeRobot orientation.
+        image = data["agentview_rgb"][t][::-1, ::-1].copy()
+        wrist_image = data["eye_in_hand_rgb"][t][::-1, ::-1].copy()
+
         # Keys match the physical-intelligence/libero LeRobot dataset so the same repack
         # transform (image→observation/image, etc.) works for both data sources.
         return {
-            "image": data["agentview_rgb"][t],
-            "wrist_image": data["eye_in_hand_rgb"][t],
+            "image": image,
+            "wrist_image": wrist_image,
             "state": state,
             "actions": actions,
             "prompt": self._prompt,
@@ -416,42 +420,9 @@ def create_torch_dataset(
     # Load dataset metadata
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     
-    # Print total episodes for a specific task
+    # Print dataset metadata
     if hasattr(dataset_meta, 'tasks') and hasattr(dataset_meta, 'total_episodes'):
-        logging.info(f"\n=== Dataset Metadata ===")
-        logging.info(f"Total episodes in dataset: {dataset_meta.total_episodes}")
-        logging.info(f"Available tasks: {list(dataset_meta.tasks.values())}")
-        
-        # Pick the first task as an example (or you can specify a particular task)
-        if dataset_meta.tasks:
-            example_task_idx = list(dataset_meta.tasks.keys())[0]
-            example_task_name = dataset_meta.tasks[example_task_idx]
-            logging.info(f"\nExample task: '{example_task_name}' (index: {example_task_idx})")
-            
-            # Count episodes for this specific task
-            # We need to load the dataset first to access the episode information
-            temp_ds = lerobot_dataset.LeRobotDataset(repo_id)
-            if hasattr(temp_ds, 'hf_dataset'):
-                task_indices = temp_ds.hf_dataset['task_index']
-                episode_indices = temp_ds.hf_dataset['episode_index']
-                
-                # Get unique episodes for this task
-                task_episodes = set()
-                for i, (task_idx, ep_idx) in enumerate(zip(task_indices, episode_indices)):
-                    if int(task_idx) == example_task_idx:
-                        task_episodes.add(int(ep_idx))
-                
-                logging.info(f"Total episodes for task '{example_task_name}': {len(task_episodes)}")
-                
-                # Print episode counts for all tasks
-                logging.info(f"\n=== Episodes per Task ===")
-                for task_idx, task_name in dataset_meta.tasks.items():
-                    task_eps = set()
-                    for i, (t_idx, e_idx) in enumerate(zip(task_indices, episode_indices)):
-                        if int(t_idx) == task_idx:
-                            task_eps.add(int(e_idx))
-                    logging.info(f"  '{task_name}': {len(task_eps)} episodes")
-                logging.info("=" * 50)
+        logging.info(f"Dataset: {repo_id} — {dataset_meta.total_episodes} episodes, {len(dataset_meta.tasks)} tasks")
     
     # Load raw LeRobot dataset
     lerobot_ds = lerobot_dataset.LeRobotDataset(
@@ -480,37 +451,12 @@ def create_torch_dataset(
     # If an HDF5 path is also specified, create an additional dataset from it and concatenate.
     hdf5_path = getattr(data_config, "hdf5_path", None)
     if hdf5_path is not None:
-        hdf5_dataset = LiberoProHDF5Dataset(hdf5_path, action_horizon, data_config.num_episodes)
+        hdf5_num_episodes = getattr(data_config, "hdf5_num_episodes", -1)
+        hdf5_dataset = LiberoProHDF5Dataset(hdf5_path, action_horizon, hdf5_num_episodes)
         logging.info(
             f"Combining LeRobot dataset ({len(dataset)} samples) with "
             f"HDF5 dataset ({len(hdf5_dataset)} samples) from {hdf5_path}"
         )
-        # SANITY-CHECK BREAKPOINT ─────────────────────────────────────────────
-        # At this point both raw datasets exist before concatenation.
-        # Useful expressions to inspect in pdb:
-        #
-        #   lr = dataset[0]          ; hdf = hdf5_dataset[0]
-        #   lr_last = dataset[-1]    ; hdf_last = hdf5_dataset[-1]
-        #
-        #   # Shapes must match:
-        #   lr['actions'].shape      # → (action_horizon, 7)
-        #   hdf['actions'].shape     # → (action_horizon, 7)
-        #   lr['image'].shape        # → (H, W, 3)
-        #   hdf['image'].shape       # → (H, W, 3)
-        #   lr['state'].shape        # → (8,)
-        #   hdf['state'].shape       # → (8,)
-        #
-        #   # Dtypes (LeRobot may return torch tensors; HDF5 returns np.float32):
-        #   type(lr['actions']),  lr['actions'].dtype
-        #   type(hdf['actions']), hdf['actions'].dtype
-        #
-        #   # Boundary padding – both datasets clamp to last action at episode end:
-        #   lr_last['actions'][-3:]   # last 3 rows should equal lr_last['actions'][-1]
-        #   hdf_last['actions'][-3:]  # same expectation for HDF5
-        #
-        #   # Prompt strings:
-        #   lr['prompt'], hdf['prompt']
-        breakpoint()  # ← remove after sanity check
         dataset = ConcatDataset([dataset, hdf5_dataset])
 
     return dataset

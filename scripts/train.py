@@ -245,6 +245,21 @@ def main(config: _config.TrainConfig):
     )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
+    # Log norm stats q01/q99 to wandb for visibility.
+    data_config = config.data.create(config.assets_dirs, config.model)
+    if data_config.norm_stats is not None:
+        norm_stats_table = {}
+        for key, ns in data_config.norm_stats.items():
+            if ns.q01 is not None and ns.q99 is not None:
+                q01 = np.asarray(ns.q01)
+                q99 = np.asarray(ns.q99)
+                for dim in range(len(q01)):
+                    norm_stats_table[f"norm_stats/{key}/q01_dim{dim}"] = q01[dim]
+                    norm_stats_table[f"norm_stats/{key}/q99_dim{dim}"] = q99[dim]
+                    norm_stats_table[f"norm_stats/{key}/range_dim{dim}"] = q99[dim] - q01[dim]
+        wandb.log(norm_stats_table, step=0)
+        logging.info(f"Logged norm stats q01/q99 to wandb for keys: {list(data_config.norm_stats.keys())}")
+
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,

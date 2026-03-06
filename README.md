@@ -329,3 +329,19 @@ python scripts/dump_filtered_data.py --num_episodes 1 --output_dir data_dumps --
 python scripts/dump_filtered_data.py --num_episodes 5 --output_dir data_dumps --filter_prompt "pick up the book and place it in the back compartment of the caddy"
 ```
 
+### Visualize train data based on config
+```
+uv run scripts/visualize_demos.py \
+      --config-name pi05_libero_lora_vision_fullft_action_placebookincaddy_task_ep1_bs32_custom_data_source_libero_pro_v2 \
+      --output-dir ./vis_train_data_dump_w_pro_8 \
+      --num-episodes-to-dump 20
+```
+
+### Unpack one hf5 with multiple episodes
+```
+uv run scripts/unpack_hf5_episodes.py \
+    --hdf5-path /data/hf_cache/datasets/LIBERO/LIBERO-PRO/data/book-caddy/book_caddy_demo.hdf5 \
+    --output-dir ./demos_extracted/
+
+```
+
