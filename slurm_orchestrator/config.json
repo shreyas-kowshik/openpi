@@ -1,0 +1,22 @@
+{
+  "base_dir": "/home/skowshik/vla/codebase/openpi",
+  "slurm_dir": "slurm/libero10/3_demos",
+  "poll_interval_seconds": 120,
+  "max_resubmits": 0,
+  "log_file": "slurm_orchestrator/orchestrator.log",
+  "state_file": "slurm_orchestrator/state.json",
+  "scripts": [
+    "black_bowl_bottom_drawer.slurm",
+    "book_caddy.slurm",
+    "cream_cheese_butter_basket.slurm",
+    "stove_mokapot.slurm",
+    "white_mug_plates.slurm"
+  ],
+  "job_names": {
+    "black_bowl_bottom_drawer.slurm": "openpi-libero10-black_bowl_bottom_drawer",
+    "book_caddy.slurm": "openpi-libero10-book_caddy",
+    "cream_cheese_butter_basket.slurm": "openpi-libero10-cream_cheese_butter_basket",
+    "stove_mokapot.slurm": "openpi-libero10-stove_mokapot",
+    "white_mug_plates.slurm": "openpi-libero10-white_mug_plates"
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "black_bowl_bottom_drawer.slurm": {
+    "script": "black_bowl_bottom_drawer.slurm",
+    "job_id": "6528221",
+    "submit_count": 3,
+    "last_submit_time": "2026-03-10T11:44:23.649143",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "book_caddy.slurm": {
+    "script": "book_caddy.slurm",
+    "job_id": "6526761",
+    "submit_count": 2,
+    "last_submit_time": "2026-03-10T04:22:56.823777",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "both_mokapots_stove.slurm": {
+    "script": "both_mokapots_stove.slurm",
+    "job_id": "6527196",
+    "submit_count": 2,
+    "last_submit_time": "2026-03-10T06:05:17.891090",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "cream_cheese_butter_basket.slurm": {
+    "script": "cream_cheese_butter_basket.slurm",
+    "job_id": "6528279",
+    "submit_count": 3,
+    "last_submit_time": "2026-03-10T12:04:29.051924",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "stove_mokapot.slurm": {
+    "script": "stove_mokapot.slurm",
+    "job_id": "6527871",
+    "submit_count": 2,
+    "last_submit_time": "2026-03-10T10:20:07.853692",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "white_mug_chocolate_pudding.slurm": {
+    "script": "white_mug_chocolate_pudding.slurm",
+    "job_id": "6527274",
+    "submit_count": 2,
+    "last_submit_time": "2026-03-10T06:27:22.290601",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "white_mug_plates.slurm": {
+    "script": "white_mug_plates.slurm",
+    "job_id": "6528315",
+    "submit_count": 3,
+    "last_submit_time": "2026-03-10T12:14:30.873007",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "yellow_white_mug_microwave.slurm": {
+    "script": "yellow_white_mug_microwave.slurm",
+    "job_id": "6527872",
+    "submit_count": 3,
+    "last_submit_time": "2026-03-10T10:20:07.985679",
+    "last_status": "SUBMITTED",
+    "retired": false
+  }
+}

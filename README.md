@@ -347,7 +347,7 @@ uv run scripts/unpack_hf5_episodes.py \
 
 ### Check slurm status on preempt jobs
 ```
-for d in /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_*_ep3/*/; do step=$(ls "$d" 2>/dev/null | grep -oP '^[0-9]+$' | sort -n | tail -1); name=$(basename "$(dirname "$d")"); task=$(echo "$name" | sed 's/pi05_libero10_//;s/_ep3//'); job_id=$(squeue -u skowshik -o "%i %j" --noheader 2>/dev/null | grep "$task" | awk '{print $1}'); [ -n "$step" ] && [ "$step" -gt 5000 ] && echo "job_id: ${job_id:-N/A} | $name -> step $step"; done
+for d in /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_*_ep{1,3}/*/; do step=$(ls "$d" 2>/dev/null | grep -oP '^[0-9]+$' | sort -n | tail -1); name=$(basename "$(dirname "$d")"); task=$(echo "$name" | sed 's/pi05_libero10_//;s/_ep[0-9]*//'); job_id=$(squeue -u skowshik -o "%i %j" --noheader 2>/dev/null | grep "$task" | awk '{print $1}'); [ -n "$step" ] && [ "$step" -gt 5000 ] && echo "job_id: ${job_id:-N/A} | $name -> step $step"; done
 ```
 
 ### Check overall name and checkpoint paths for job ids currently running
