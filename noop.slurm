@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=rlvr-v1
+#SBATCH --job-name=orchest
 #SBATCH --partition=general          # partition name
 #SBATCH --qos=normal            # qos
-#SBATCH --gres=gpu:A6000:1               # request 2 GPUs
+#SBATCH --gres=gpu:1               # request 2 GPUs
 #SBATCH --cpus-per-task=16          # number of CPUs (increased)
 #SBATCH --time=48:00:00          # time (1 day)
 #SBATCH --mem=128G                   # 128GB total RAM (increased from 48GB)
