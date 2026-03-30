@@ -4213,6 +4213,75 @@ _CONFIGS = [
         log_interval=100,
         action_l1_loss_interval=1000,
     ),
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_sink2counter_ep_meta_debug_v1",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,  # Compute norm stats from filtered demos
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/target/atomic/PickPlaceSinkToCounter/20250813/lerobot",
+                "filter_key": None,
+            }],
+            # Match full ep_meta of episode 10 (orange, layout=7, style=7,
+            # fixture_refs=sink_island_group/island_island_group).
+            # Filters to episodes with the exact same environment setup.
+            match_episode_id=10,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=5_000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_cabinet2counter_ep_meta_debug_v1",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,  # Compute norm stats from filtered demos
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/target/atomic/PickPlaceCabinetToCounter/20250819/lerobot",
+                "filter_key": None,
+            }],
+            # Match full ep_meta of episode 53 (marshmallow, layout=46, style=15,
+            # fixture_refs=singlecabinet_2_main_group_1/counter_2_main_group_1,
+            # objects=marshmallow+baguette+hot_dog). No occlusion episode.
+            # Filters to episodes with the exact same environment setup (1 demo).
+            match_episode_id=53,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=5_000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
