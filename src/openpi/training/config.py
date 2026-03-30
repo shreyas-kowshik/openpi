@@ -27,6 +27,9 @@ import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
+import openpi.policies.robocasa_policy as robocasa_policy
+import openpi.groot_utils.groot_openpi_dataset as _groot_openpi_dataset
+import numpy as np
 
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -106,6 +109,11 @@ class DataConfig:
     # Number of HDF5 episodes to load. -1 means load all. Independent from num_episodes which
     # controls LeRobot episode filtering.
     hdf5_num_episodes: int = -1
+
+    # Groot/RoboCasa dataset directories (list of dicts with 'path' and 'filter_key' keys).
+    data_dirs: list[dict] | None = None
+    # Sampling weights for multi-dataset training.
+    dataset_weights: list[float] | None = None
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -575,6 +583,103 @@ class LeRobotDROIDDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotRobocasaDataConfig(DataConfigFactory):
+    """Config for training on Groot/RoboCasa datasets."""
+
+    repo_id: str | None = None
+
+    data_dirs: Any | None = None
+    dataset_weights: list[float] | None = None
+
+    action_dim: int | None = None
+
+    # Scene filtering: restrict to specific (layout_id, style_id) pairs
+    layout_and_style_ids: list[tuple[int, int]] | None = None
+    # Number of demos to use after scene filtering
+    num_demos: int | None = None
+    # Object category filter: only use demos with this primary object category
+    # (e.g., "honey_bottle", "banana"). None means no filtering.
+    obj_category: str | None = None
+    # Fixture refs filter: only use demos whose fixture_refs match exactly.
+    # E.g. {"cab": "cab_2_main_group", "counter": "counter_main_main_group"}.
+    # This pins the exact counter/cabinet location within a layout, giving the
+    # most similar demos (same camera view, same scene structure).
+    fixture_refs: dict[str, str] | None = None
+    # Match full ep_meta: specify an episode ID whose full ep_meta state
+    # (layout, style, fixture_refs, ALL object categories) must be matched.
+    # When set, overrides layout_and_style_ids/fixture_refs/obj_category filters.
+    # Filters to only episodes with the exact same environment setup.
+    match_episode_id: int | None = None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group()
+
+        data_transforms = _transforms.Group(
+            inputs=[robocasa_policy.RobocasaInputs(action_dim=model_config.action_dim, model_type=model_config.model_type)],
+            outputs=[robocasa_policy.RobocasaOutputs()],
+        )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        base = self.create_base_config(assets_dirs, model_config)
+
+        # Enrich data_dirs with scene filtering params
+        enriched_data_dirs = self.data_dirs
+        if self.data_dirs and (
+            self.match_episode_id is not None
+            or self.layout_and_style_ids is not None
+            or self.num_demos is not None
+            or self.obj_category is not None
+            or self.fixture_refs is not None
+        ):
+            enriched_data_dirs = []
+            for d in self.data_dirs:
+                d_copy = dict(d)
+                if self.match_episode_id is not None:
+                    d_copy["match_episode_id"] = self.match_episode_id
+                if self.layout_and_style_ids is not None:
+                    d_copy["layout_and_style_ids"] = self.layout_and_style_ids
+                if self.num_demos is not None:
+                    d_copy["num_demos"] = self.num_demos
+                if self.obj_category is not None:
+                    d_copy["obj_category"] = self.obj_category
+                if self.fixture_refs is not None:
+                    d_copy["fixture_refs"] = self.fixture_refs
+                enriched_data_dirs.append(d_copy)
+
+        # Fallback: compute norm stats from the actual filtered demos.
+        # This ensures stats match the training subset (scene / num_demos / obj_category filters).
+        # Results are cached to disk alongside the dataset.
+        fallback_norm_stats = None
+        if base.norm_stats is None and enriched_data_dirs and len(enriched_data_dirs) > 0:
+            action_horizon = model_config.action_horizon
+            if len(enriched_data_dirs) == 1:
+                norm_stats = _groot_openpi_dataset.compute_norm_stats_from_filtered_dataset(
+                    enriched_data_dirs[0], action_horizon,
+                )
+                fallback_norm_stats = norm_stats
+            else:
+                per_ds = [
+                    _groot_openpi_dataset.compute_norm_stats_from_filtered_dataset(d, action_horizon)
+                    for d in enriched_data_dirs
+                ]
+                fallback_norm_stats = _groot_openpi_dataset.compute_overall_statistics(
+                    per_ds, dataset_sampling_weights=np.ones(len(per_ds)),
+                )
+
+        return dataclasses.replace(
+            base,
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            data_dirs=enriched_data_dirs,
+            dataset_weights=self.dataset_weights,
+            norm_stats=base.norm_stats or fallback_norm_stats,
         )
 
 
@@ -4071,6 +4176,43 @@ _CONFIGS = [
     # RoboArena configs.
     #
     *roboarena_config.get_roboarena_configs(),
+    #
+    # RoboCasa configs.
+    #
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_layout2style2_ep_meta_debug_v1",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,  # Compute norm stats from filtered demos
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/target/atomic/PickPlaceCounterToCabinet/20250811/lerobot",
+                "filter_key": None,
+            }],
+            # Match full ep_meta of episode 23 (apple, layout=2, style=2,
+            # fixture_refs=cab_2_main_group/counter_main_main_group).
+            # Filters to episodes with the exact same environment setup.
+            match_episode_id=23,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=5_000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):

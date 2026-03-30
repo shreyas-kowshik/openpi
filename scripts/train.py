@@ -247,6 +247,35 @@ def main(config: _config.TrainConfig):
 
     # Log norm stats q01/q99 to wandb for visibility.
     data_config = config.data.create(config.assets_dirs, config.model)
+
+    # Save reference ep_meta for RoboCasa datasets (used to reproduce exact eval setup).
+    if getattr(data_config, "data_dirs", None) and not resuming:
+        import json as _json
+        import openpi.groot_utils.groot_openpi_dataset as _groot_ds
+        import pathlib as _pathlib
+        first_data_dir = data_config.data_dirs[0]
+        ds_path = _pathlib.Path(first_data_dir["path"])
+        match_episode_id = first_data_dir.get("match_episode_id")
+        layout_and_style_ids = first_data_dir.get("layout_and_style_ids")
+        num_demos = first_data_dir.get("num_demos")
+        obj_category = first_data_dir.get("obj_category")
+        fixture_refs = first_data_dir.get("fixture_refs")
+        if match_episode_id is not None or layout_and_style_ids is not None:
+            ref_ep_meta = _groot_ds.get_reference_ep_meta(
+                ds_path, layout_and_style_ids, num_demos, obj_category, fixture_refs,
+                match_episode_id=match_episode_id,
+            )
+            ref_path = config.checkpoint_dir / "reference_ep_meta.json"
+            ref_path.write_text(_json.dumps(ref_ep_meta, indent=2))
+            ref_obj = ref_ep_meta.get("object_cfgs", [{}])[0].get("info", {}).get("cat", "N/A")
+            ref_fxrefs = ref_ep_meta.get("fixture_refs", {})
+            all_objs = [c.get("info", {}).get("cat", "?") for c in ref_ep_meta.get("object_cfgs", [])]
+            logging.info(
+                f"Saved reference ep_meta to {ref_path} "
+                f"(layout={ref_ep_meta.get('layout_id')}, style={ref_ep_meta.get('style_id')}, "
+                f"objects={all_objs}, fixture_refs={ref_fxrefs})"
+            )
+
     if data_config.norm_stats is not None:
         norm_stats_table = {}
         for key, ns in data_config.norm_stats.items():
@@ -265,10 +294,70 @@ def main(config: _config.TrainConfig):
         sharding=data_sharding,
         shuffle=True,
     )
+
+    # Log dataset statistics for visibility.
+    _inner_loader = data_loader._data_loader if hasattr(data_loader, "_data_loader") else None
+    _inner_torch = getattr(_inner_loader, "_data_loader", None) if _inner_loader else None
+    _raw_dataset = _inner_torch.dataset if _inner_torch else None
+    if _raw_dataset is not None:
+        # Walk through TransformedDataset wrappers to find the root dataset
+        _root_ds = _raw_dataset
+        while hasattr(_root_ds, "_dataset"):
+            _root_ds = _root_ds._dataset
+        num_samples = len(_raw_dataset)
+        # Groot datasets expose trajectory_ids and trajectory_lengths
+        if hasattr(_root_ds, "trajectory_ids") and hasattr(_root_ds, "trajectory_lengths"):
+            num_episodes = len(_root_ds.trajectory_ids)
+            total_timesteps = int(sum(_root_ds.trajectory_lengths))
+            ep_lens = _root_ds.trajectory_lengths
+            dataset_info = {
+                "dataset/num_episodes": num_episodes,
+                "dataset/total_timesteps": total_timesteps,
+                "dataset/num_training_samples": num_samples,
+                "dataset/mean_episode_length": float(ep_lens.mean()),
+                "dataset/min_episode_length": int(ep_lens.min()),
+                "dataset/max_episode_length": int(ep_lens.max()),
+            }
+            wandb.log(dataset_info, step=0)
+            logging.info(
+                f"Dataset: {num_episodes} episodes, {total_timesteps} total timesteps, "
+                f"{num_samples} training samples (with action horizon), "
+                f"episode lengths: mean={ep_lens.mean():.0f}, "
+                f"min={ep_lens.min()}, max={ep_lens.max()}"
+            )
+        else:
+            wandb.log({"dataset/num_training_samples": num_samples}, step=0)
+            logging.info(f"Dataset: {num_samples} training samples")
+        del _root_ds
+
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
-    # LOG: `batch` statistics #
+
+    # Log per-dimension action values for batch0 at training start (one-time).
+    _init_actions = jax.device_get(batch[1])  # (batch_size, action_horizon, action_dim)
+    _init_actions_0 = _init_actions[0]  # first batch element: (action_horizon, action_dim)
+    action_init_log = {}
+    logging.info("=== Batch0 Action Values at Training Start ===")
+    for d in range(_init_actions_0.shape[-1]):
+        col = _init_actions_0[:, d]
+        col_all = _init_actions[:, :, d]  # all batch elements for this dim
+        action_init_log[f"init_batch0_action/dim{d}_mean"] = float(col.mean())
+        action_init_log[f"init_batch0_action/dim{d}_min"] = float(col.min())
+        action_init_log[f"init_batch0_action/dim{d}_max"] = float(col.max())
+        action_init_log[f"init_batch0_action/dim{d}_std"] = float(col.std())
+        # Also log stats across the full batch for this dimension
+        action_init_log[f"init_fullbatch_action/dim{d}_mean"] = float(col_all.mean())
+        action_init_log[f"init_fullbatch_action/dim{d}_min"] = float(col_all.min())
+        action_init_log[f"init_fullbatch_action/dim{d}_max"] = float(col_all.max())
+        action_init_log[f"init_fullbatch_action/dim{d}_std"] = float(col_all.std())
+        logging.info(
+            f"  dim {d}: batch0[mean={col.mean():.4f}, min={col.min():.4f}, max={col.max():.4f}, std={col.std():.4f}] "
+            f"fullbatch[mean={col_all.mean():.4f}, min={col_all.min():.4f}, max={col_all.max():.4f}, std={col_all.std():.4f}]"
+        )
+    wandb.log(action_init_log, step=0)
+    logging.info("=" * 60)
+    del _init_actions, _init_actions_0
 
     # Log images from first batch to sanity check.
     images_to_log = [
@@ -355,6 +444,17 @@ def main(config: _config.TrainConfig):
                 wandb.log({"l1_loss_dim_" + str(i): _l1_loss}, step=step)
             del out_inferred
             del _l1_loss
+
+        # Log per-dimension action values for the first element of the batch.
+        if step % config.log_interval == 0:
+            gt_actions_0 = jax.device_get(batch[1][0])  # (action_horizon, action_dim)
+            action_log = {}
+            for i in range(gt_actions_0.shape[-1]):
+                col = gt_actions_0[:, i]
+                action_log[f"batch0_action/dim{i}_mean"] = float(col.mean())
+                action_log[f"batch0_action/dim{i}_min"] = float(col.min())
+                action_log[f"batch0_action/dim{i}_max"] = float(col.max())
+            wandb.log(action_log, step=step)
         
         batch = next(data_iter)
 

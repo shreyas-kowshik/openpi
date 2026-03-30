@@ -53,8 +53,8 @@ def create_torch_dataloader(
     num_workers: int,
     max_frames: int | None = None,
 ) -> tuple[_data_loader.Dataset, int]:
-    if data_config.repo_id is None:
-        raise ValueError("Data config must have a repo_id")
+    if data_config.repo_id is None and not getattr(data_config, "data_dirs", None):
+        raise ValueError("Data config must have a repo_id or data_dirs")
     dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config)
     dataset = _data_loader.TransformedDataset(
         dataset,
@@ -159,9 +159,34 @@ def main(config_name: str, max_frames: int | None = None):
                     ns.q01[gripper_dim] = GRIPPER_Q01
                     ns.q99[gripper_dim] = GRIPPER_Q99
 
-    output_path = config.assets_dirs / data_config.repo_id
+    # Determine output path: use repo_id if available, else use asset_id or "robocasa"
+    if data_config.repo_id is not None:
+        output_path = config.assets_dirs / data_config.repo_id
+    elif data_config.asset_id is not None:
+        output_path = config.assets_dirs / data_config.asset_id
+    else:
+        output_path = config.assets_dirs / "robocasa"
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
+
+    # Also print per-dimension stats for visibility
+    for key in keys:
+        ns = norm_stats[key]
+        print(f"\n=== {key} norm stats ===")
+        ndims = len(ns.mean) if hasattr(ns.mean, '__len__') else 1
+        for d in range(ndims):
+            m = ns.mean[d] if hasattr(ns.mean, '__len__') else ns.mean
+            s = ns.std[d] if hasattr(ns.std, '__len__') else ns.std
+            q01_v = ns.q01[d] if ns.q01 is not None and hasattr(ns.q01, '__len__') else None
+            q99_v = ns.q99[d] if ns.q99 is not None and hasattr(ns.q99, '__len__') else None
+            # Stop printing once we hit padding (mean=0, std=1)
+            if abs(m) < 1e-10 and abs(s - 1.0) < 1e-10:
+                print(f"  dim {d}+: padding (zeros)")
+                break
+            line = f"  dim {d}: mean={m:.6f}, std={s:.6f}"
+            if q01_v is not None:
+                line += f", q01={q01_v:.6f}, q99={q99_v:.6f}, range={q99_v - q01_v:.6f}"
+            print(line)
 
 
 if __name__ == "__main__":
