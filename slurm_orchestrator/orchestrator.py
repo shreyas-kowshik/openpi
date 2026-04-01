@@ -173,17 +173,19 @@ def get_job_name_from_script(script_path: str) -> Optional[str]:
 
 
 def find_running_job_by_name(job_name: str) -> Optional[str]:
-    """Check if a job with the given name is already in the queue. Returns job ID or None."""
+    """Check if a job with the given name is already in the queue (any user). Returns job ID or None."""
     try:
         result = subprocess.run(
-            ["squeue", "--me", "--name=" + job_name, "--noheader", "--format=%i"],
+            ["squeue", "--name=" + job_name, "--noheader", "--format=%i %u"],
             capture_output=True,
             text=True,
             timeout=15,
         )
         lines = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
         if lines:
-            return lines[0]
+            job_id, user = lines[0].split(None, 1)
+            logger.info("Found existing job %s (user=%s) for '%s'", job_id, user, job_name)
+            return job_id
     except Exception as e:
         logger.warning("squeue name check failed for '%s': %s", job_name, e)
     return None
@@ -218,7 +220,11 @@ def get_job_status(job_id: str) -> Optional[str]:
 class Orchestrator:
     def __init__(self, config_path: str):
         self.config = load_config(config_path)
-        self.base_dir = self.config.get("base_dir", os.getcwd())
+        # Derive repo root: orchestrator.py lives in <repo>/slurm_orchestrator/
+        self.base_dir = self.config.get(
+            "base_dir",
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        )
         self.slurm_dir = os.path.join(self.base_dir, self.config["slurm_dir"])
         self.poll_interval = self.config.get("poll_interval_seconds", 120)
         self.max_resubmits = self.config.get("max_resubmits", 0)  # 0 = unlimited
@@ -323,6 +329,10 @@ class Orchestrator:
 
     def _submit(self, entry: JobEntry):
         """Submit (or resubmit) a job for the given entry."""
+        # Final guard: check one more time right before submitting
+        if self._check_adopt_existing(entry):
+            return
+
         script_path = os.path.join(self.slurm_dir, entry.script)
         if not os.path.exists(script_path):
             logger.error("Script not found: %s", script_path)

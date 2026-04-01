@@ -1,5 +1,4 @@
 {
-  "base_dir": "/data/group_data/maxlab/common_datasets/openpi",
   "slurm_dir": "slurm/libero10/1_demo",
   "poll_interval_seconds": 120,
   "max_resubmits": 0,
