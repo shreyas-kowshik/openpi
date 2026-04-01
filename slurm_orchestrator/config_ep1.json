@@ -1,0 +1,32 @@
+{
+  "base_dir": "/data/group_data/maxlab/common_datasets/openpi",
+  "slurm_dir": "slurm/libero10/1_demo",
+  "poll_interval_seconds": 120,
+  "max_resubmits": 0,
+  "log_file": "slurm_orchestrator/orchestrator_ep1.log",
+  "state_file": "slurm_orchestrator/state_ep1.json",
+  "scripts": [
+    "alphabet_soup_tomato_sauce_basket.slurm",
+    "alphabet_soup_cream_cheese_basket.slurm",
+    "black_bowl_bottom_drawer.slurm",
+    "book_caddy.slurm",
+    "both_mokapots_stove.slurm",
+    "cream_cheese_butter_basket.slurm",
+    "stove_mokapot.slurm",
+    "white_mug_chocolate_pudding.slurm",
+    "white_mug_plates.slurm",
+    "yellow_white_mug_microwave.slurm"
+  ],
+  "job_names": {
+    "alphabet_soup_tomato_sauce_basket.slurm": "openpi-libero10-ep1-alphabet_soup_tomato_sauce_basket",
+    "alphabet_soup_cream_cheese_basket.slurm": "openpi-libero10-ep1-alphabet_soup_cream_cheese_basket",
+    "black_bowl_bottom_drawer.slurm": "openpi-libero10-ep1-black_bowl_bottom_drawer",
+    "book_caddy.slurm": "openpi-libero10-ep1-book_caddy",
+    "both_mokapots_stove.slurm": "openpi-libero10-ep1-both_mokapots_stove",
+    "cream_cheese_butter_basket.slurm": "openpi-libero10-ep1-cream_cheese_butter_basket",
+    "stove_mokapot.slurm": "openpi-libero10-ep1-stove_mokapot",
+    "white_mug_chocolate_pudding.slurm": "openpi-libero10-ep1-white_mug_chocolate_pudding",
+    "white_mug_plates.slurm": "openpi-libero10-ep1-white_mug_plates",
+    "yellow_white_mug_microwave.slurm": "openpi-libero10-ep1-yellow_white_mug_microwave"
+  }
+}

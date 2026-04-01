@@ -1,44 +1,30 @@
 #!/bin/bash
-#SBATCH --job-name=openpi-libero10-white_mug_chocolate_pudding
+#SBATCH --job-name=openpi-libero10-ep3-white_mug_chocolate_pudding
 #SBATCH --nodes=1
-#SBATCH --requeue
-#SBATCH --signal=B:USR1@120
-#SBATCH --open-mode=append
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=8:00:00
 #SBATCH --partition=preempt
-#SBATCH --exclude=babel-l5-16,babel-u5-28
-#SBATCH --output=/data/user_data/skowshik/openpi-libero10/logs/outcome_%j.out
-#SBATCH --error=/data/user_data/skowshik/openpi-libero10/logs/outcome_%j.err
+#SBATCH --output=/data/user_data/%u/openpi-libero10/logs/%x_%j.out
+#SBATCH --error=/data/user_data/%u/openpi-libero10/logs/%x_%j.err
 
-export HF_HOME="/data/user_data/skowshik/huggingface"
-export HF_DATASETS_CACHE="/data/user_data/skowshik/huggingface"
-export WANDB_ENTITY="skowshik-carnegie-mellon-university"
+REPO_ROOT="/data/group_data/maxlab/common_datasets/openpi"
 
-mkdir -p /data/user_data/skowshik/openpi-libero10/logs
+# Load user-specific env (must define HF_HOME)
+if [[ -f "$REPO_ROOT/.env" ]]; then
+    set -a
+    source "$REPO_ROOT/.env"
+    set +a
+fi
 
-echo "Starting training on $(hostname)"
-echo "Running at $(date)"
-echo $SLURM_JOB_ID
-scontrol show job $SLURM_JOB_ID | egrep -i "gres|tres|partition|nodes"
-echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+export HF_DATASETS_CACHE="/data/hf_cache/datasets/"
 
-nvidia-smi
+mkdir -p "/data/user_data/$USER/openpi-libero10/logs"
 
 CONFIG_NAME="pi05_libero10_white_mug_chocolate_pudding_ep3"
 
-cd /home/skowshik/vla/codebase/openpi
+cd "$REPO_ROOT"
 
 uv run scripts/compute_norm_stats.py --config-name ${CONFIG_NAME}
-cleanup() {
-    echo "$(date): Caught signal, letting training save checkpoint..."
-    kill -TERM $TRAIN_PID 2>/dev/null
-    wait $TRAIN_PID
-}
-trap cleanup USR1 SIGTERM
-
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py ${CONFIG_NAME} --exp-name=${CONFIG_NAME}-v1 --resume &
-TRAIN_PID=$!
-wait $TRAIN_PID
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py ${CONFIG_NAME} --exp-name=${CONFIG_NAME}-v1 --resume

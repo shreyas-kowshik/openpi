@@ -37,7 +37,7 @@ from typing import Optional
 
 logger = logging.getLogger("orchestrator")
 
-DEFAULT_CONFIG = "slurm_orchestrator/config_1demo.json"
+DEFAULT_CONFIG = "slurm_orchestrator/config_ep1.json"
 
 
 @dataclass
