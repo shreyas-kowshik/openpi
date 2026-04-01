@@ -378,3 +378,9 @@ for d in /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_*_ep{1,3}
 ```
 squeue -u skowshik -o "%i %j" --noheader | while read id name; do task=$(echo "$name" | sed 's/openpi-libero10-//'); ckpt=$(find /data/hf_cache/models/pi05_checkpoints_libero10/ -maxdepth 2 -type d -name "*${task}*" 2>/dev/null | head -1); echo "job_id: $id | name: $name | checkpoint: ${ckpt:-N/A}"; done > /home/skowshik/vla/codebase/openpi/tem.txt
 ```
+
+### Launch large scale libero10 experiments
+```
+sbatch --export=CONFIG=slurm_orchestrator/config_ep1.json slurm_orchestrator/orchestrator.slurm
+```
+

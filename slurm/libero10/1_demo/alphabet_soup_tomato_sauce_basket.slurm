@@ -9,12 +9,14 @@
 #SBATCH --output=/data/user_data/%u/openpi-libero10/logs/%x_%j.out
 #SBATCH --error=/data/user_data/%u/openpi-libero10/logs/%x_%j.err
 
-REPO_ROOT="/data/group_data/maxlab/common_datasets/openpi"
+# Repo root = directory from which sbatch was called
+REPO_DIR="${SLURM_SUBMIT_DIR}"
 
-# Load user-specific env (must define HF_HOME)
-if [[ -f "$REPO_ROOT/.env" ]]; then
+export PATH="$HOME/.local/bin:$PATH"
+
+if [[ -f "$REPO_DIR/.env" ]]; then
     set -a
-    source "$REPO_ROOT/.env"
+    source "$REPO_DIR/.env"
     set +a
 fi
 
@@ -24,7 +26,7 @@ mkdir -p "/data/user_data/$USER/openpi-libero10/logs"
 
 CONFIG_NAME="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1"
 
-cd "$REPO_ROOT"
+cd "$REPO_DIR"
 
 uv run scripts/compute_norm_stats.py --config-name ${CONFIG_NAME}
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py ${CONFIG_NAME} --exp-name=${CONFIG_NAME}-v1 --resume
