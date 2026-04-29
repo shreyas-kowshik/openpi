@@ -1,0 +1,26 @@
+{
+  "both_mokapots_stove_ep3_filtered.slurm": {
+    "script": "both_mokapots_stove_ep3_filtered.slurm",
+    "job_id": null,
+    "submit_count": 0,
+    "last_submit_time": null,
+    "last_status": "SUBMIT_FAILED",
+    "retired": false
+  },
+  "both_mokapots_stove_ep5_filtered.slurm": {
+    "script": "both_mokapots_stove_ep5_filtered.slurm",
+    "job_id": null,
+    "submit_count": 0,
+    "last_submit_time": null,
+    "last_status": "SUBMIT_FAILED",
+    "retired": false
+  },
+  "white_mug_chocolate_pudding_ep5_filtered.slurm": {
+    "script": "white_mug_chocolate_pudding_ep5_filtered.slurm",
+    "job_id": null,
+    "submit_count": 0,
+    "last_submit_time": null,
+    "last_status": "SUBMIT_FAILED",
+    "retired": false
+  }
+}

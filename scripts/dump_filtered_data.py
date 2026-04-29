@@ -11,6 +11,13 @@ Usage:
         --filter_prompt "put both moka pots on the stove" \
         --num_episodes 5 \
         --output_dir /tmp/openpi_data_dumps
+
+    # Or filter to specific episode IDs:
+    python scripts/dump_filtered_data.py \
+        --repo_id physical-intelligence/libero \
+        --filter_prompt "put both moka pots on the stove" \
+        --episode_ids 86 \
+        --output_dir /tmp/openpi_data_dumps
 """
 
 import argparse
@@ -29,6 +36,7 @@ def get_filtered_episodes(
     filter_prompt: str,
     num_episodes: int = -1,
     exclude_filter_prompt: bool = False,
+    episode_ids: list[int] | None = None,
 ):
     """Use dataset metadata to find matching episodes.
 
@@ -59,8 +67,18 @@ def get_filtered_episodes(
     logger.info(f"Found {len(matching_episodes)} matching episodes")
     logger.info(f"All matching episode indices (in order): {matching_episodes}")
 
+    # Filter to specific episode IDs if provided
+    if episode_ids:
+        episode_ids_set = set(episode_ids)
+        before_count = len(matching_episodes)
+        matching_episodes = [ep for ep in matching_episodes if ep in episode_ids_set]
+        missing = episode_ids_set - set(matching_episodes)
+        if missing:
+            logger.warning(f"Requested episode IDs not found in matching episodes: {sorted(missing)}")
+        logger.info(f"Filtered by episode_ids: {before_count} -> {len(matching_episodes)} episodes")
+        logger.info(f"Selected episodes: {matching_episodes}")
     # Limit by number of episodes (only when including, not excluding)
-    if not exclude_filter_prompt and num_episodes > 0 and len(matching_episodes) > num_episodes:
+    elif not exclude_filter_prompt and num_episodes > 0 and len(matching_episodes) > num_episodes:
         logger.info(
             f"Limiting from {len(matching_episodes)} episodes to {num_episodes} episodes"
         )
@@ -94,8 +112,15 @@ def main():
     parser = argparse.ArgumentParser(description="Dump filtered training data indices")
     parser.add_argument("--repo_id", type=str, default="physical-intelligence/libero")
     parser.add_argument("--filter_prompt", type=str, default="put both moka pots on the stove")
-    parser.add_argument("--num_episodes", type=int, default=5)
+    parser.add_argument("--num_episodes", type=int, default=-1)
     parser.add_argument("--exclude_filter_prompt", action="store_true")
+    parser.add_argument(
+        "--episode_ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Specific global episode IDs to keep (after prompt filtering). Mutually exclusive with num_episodes.",
+    )
     parser.add_argument(
         "--output_dir",
         type=str,
@@ -105,11 +130,15 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
+    if args.episode_ids and args.num_episodes > 0:
+        parser.error("Cannot specify both --episode_ids and --num_episodes. Use one or the other.")
+
     valid_indices, matching_episodes, tasks_map, episodes, episode_to_sample_indices = get_filtered_episodes(
         repo_id=args.repo_id,
         filter_prompt=args.filter_prompt,
         num_episodes=args.num_episodes,
         exclude_filter_prompt=args.exclude_filter_prompt,
+        episode_ids=args.episode_ids,
     )
 
     # Summary
@@ -123,13 +152,18 @@ def main():
 
     # Save the dump
     safe_prompt = args.filter_prompt.replace(" ", "_")[:60]
-    dump_filename = f"filtered_{safe_prompt}_ep{args.num_episodes}.json"
+    if args.episode_ids:
+        ep_ids_str = "_".join(str(e) for e in args.episode_ids)
+        dump_filename = f"filtered_{safe_prompt}_epids_{ep_ids_str}.json"
+    else:
+        dump_filename = f"filtered_{safe_prompt}_ep{args.num_episodes}.json"
     dump_path = os.path.join(args.output_dir, dump_filename)
 
     dump = {
         "repo_id": args.repo_id,
         "filter_prompt": args.filter_prompt,
         "num_episodes": args.num_episodes,
+        "episode_ids": args.episode_ids,
         "exclude_filter_prompt": args.exclude_filter_prompt,
         "total_samples": len(valid_indices),
         "episode_indices": matching_episodes,

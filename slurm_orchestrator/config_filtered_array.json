@@ -1,0 +1,17 @@
+{
+  "slurm_dir": "slurm/libero10/filtered_array",
+  "poll_interval_seconds": 120,
+  "max_resubmits": 0,
+  "log_file": "slurm_orchestrator/orchestrator_filtered_array.log",
+  "state_file": "slurm_orchestrator/state_filtered_array.json",
+  "scripts": [
+    "both_mokapots_stove_ep3_filtered.slurm",
+    "both_mokapots_stove_ep5_filtered.slurm",
+    "white_mug_chocolate_pudding_ep5_filtered.slurm"
+  ],
+  "job_names": {
+    "both_mokapots_stove_ep3_filtered.slurm": "openpi-libero10-ep3-both_mokapots_stove_filtered",
+    "both_mokapots_stove_ep5_filtered.slurm": "openpi-libero10-ep5-both_mokapots_stove_filtered",
+    "white_mug_chocolate_pudding_ep5_filtered.slurm": "openpi-libero10-ep5-white_mug_choc_filtered"
+  }
+}

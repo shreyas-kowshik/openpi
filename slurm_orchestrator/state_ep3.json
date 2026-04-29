@@ -1,0 +1,82 @@
+{
+  "alphabet_soup_tomato_sauce_basket.slurm": {
+    "script": "alphabet_soup_tomato_sauce_basket.slurm",
+    "job_id": "6948702",
+    "submit_count": 4,
+    "last_submit_time": "2026-04-04T04:13:49.354268",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "alphabet_soup_cream_cheese_basket.slurm": {
+    "script": "alphabet_soup_cream_cheese_basket.slurm",
+    "job_id": "6950332",
+    "submit_count": 3,
+    "last_submit_time": "2026-04-04T10:28:53.238199",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "black_bowl_bottom_drawer.slurm": {
+    "script": "black_bowl_bottom_drawer.slurm",
+    "job_id": "6949149",
+    "submit_count": 4,
+    "last_submit_time": "2026-04-04T06:55:28.482076",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "book_caddy.slurm": {
+    "script": "book_caddy.slurm",
+    "job_id": "6948714",
+    "submit_count": 3,
+    "last_submit_time": "2026-04-04T04:23:53.285170",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "both_mokapots_stove.slurm": {
+    "script": "both_mokapots_stove.slurm",
+    "job_id": "6940800",
+    "submit_count": 2,
+    "last_submit_time": "2026-04-03T12:10:26.224990",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "cream_cheese_butter_basket.slurm": {
+    "script": "cream_cheese_butter_basket.slurm",
+    "job_id": "6948775",
+    "submit_count": 4,
+    "last_submit_time": "2026-04-04T05:04:10.031715",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "stove_mokapot.slurm": {
+    "script": "stove_mokapot.slurm",
+    "job_id": "6950540",
+    "submit_count": 4,
+    "last_submit_time": "2026-04-04T11:31:17.110732",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "white_mug_chocolate_pudding.slurm": {
+    "script": "white_mug_chocolate_pudding.slurm",
+    "job_id": "6938281",
+    "submit_count": 1,
+    "last_submit_time": "2026-04-03T04:09:40.441109",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "white_mug_plates.slurm": {
+    "script": "white_mug_plates.slurm",
+    "job_id": "6948176",
+    "submit_count": 3,
+    "last_submit_time": "2026-04-04T01:08:37.562081",
+    "last_status": "SUBMITTED",
+    "retired": false
+  },
+  "yellow_white_mug_microwave.slurm": {
+    "script": "yellow_white_mug_microwave.slurm",
+    "job_id": "6950136",
+    "submit_count": 3,
+    "last_submit_time": "2026-04-04T09:08:24.234482",
+    "last_status": "SUBMITTED",
+    "retired": false
+  }
+}

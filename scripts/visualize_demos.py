@@ -87,6 +87,20 @@ def _get_episode_groups(dataset) -> list[tuple[str, list[int]]]:
     if isinstance(dataset, _data_loader.TransformedDataset):
         return _get_episode_groups(dataset._dataset)
 
+    # -- EpisodeFilteredDataset: map back to underlying indices --
+    if isinstance(dataset, _data_loader.EpisodeFilteredDataset):
+        inner_groups = _get_episode_groups(dataset._dataset)
+        valid_set = set(dataset._valid_indices)
+        inner_to_filtered = {}
+        for filtered_idx, inner_idx in enumerate(dataset._valid_indices):
+            inner_to_filtered[inner_idx] = filtered_idx
+        groups = []
+        for label, inner_indices in inner_groups:
+            mapped = [inner_to_filtered[i] for i in inner_indices if i in valid_set]
+            if mapped:
+                groups.append((label, mapped))
+        return groups
+
     # -- FilteredDataset: map back to underlying indices --
     if isinstance(dataset, _data_loader.FilteredDataset):
         inner_groups = _get_episode_groups(dataset._dataset)

@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=8:00:00
-#SBATCH --partition=preempt
+#SBATCH --partition=general
 #SBATCH --output=/data/user_data/%u/openpi-libero10/logs/%x_%j.out
 #SBATCH --error=/data/user_data/%u/openpi-libero10/logs/%x_%j.err
 
@@ -29,4 +29,4 @@ CONFIG_NAME="pi05_libero10_alphabet_soup_cream_cheese_basket_ep1"
 cd "$REPO_DIR"
 
 uv run scripts/compute_norm_stats.py --config-name ${CONFIG_NAME}
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py ${CONFIG_NAME} --exp-name=${CONFIG_NAME}-v1 --resume
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py ${CONFIG_NAME} --exp-name=${CONFIG_NAME}-v1 --wandb-entity=skowshik-carnegie-mellon-university --resume

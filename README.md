@@ -352,13 +352,17 @@ python scripts/dump_filtered_data.py --num_episodes 1 --output_dir data_dumps --
 python scripts/dump_filtered_data.py --num_episodes 1 --output_dir data_dumps --filter_prompt "put the yellow and white mug in the microwave and close it"
 
 ```
+python scripts/dump_filtered_data.py --num_episodes 3 --output_dir data_dumps --filter_prompt "put both moka pots on the stove"
+```
+
+```
 
 ### Visualize train data based on config
 ```
 uv run scripts/visualize_demos.py \
-      --config-name pi05_libero_lora_vision_fullft_action_placebookincaddy_task_ep1_bs32_custom_data_source_libero_pro_v2 \
-      --output-dir ./vis_train_data_dump_w_pro_8 \
-      --num-episodes-to-dump 20
+      --config-name pi05_libero10_both_mokapots_stove_episode_ids_demo \
+      --output-dir ./vis_train_data_dump_mokapots_epids_ep1 \
+      --num-episodes-to-dump 1
 ```
 
 ### Unpack one hf5 with multiple episodes
@@ -382,5 +386,9 @@ squeue -u skowshik -o "%i %j" --noheader | while read id name; do task=$(echo "$
 ### Launch large scale libero10 experiments
 ```
 sbatch --export=CONFIG=slurm_orchestrator/config_ep1.json slurm_orchestrator/orchestrator.slurm
+
+sbatch --export=CONFIG=slurm_orchestrator/config_ep3.json slurm_orchestrator/orchestrator.slurm
+
+sbatch --export=CONFIG=slurm_orchestrator/config_ep5.json slurm_orchestrator/orchestrator.slurm
 ```
 

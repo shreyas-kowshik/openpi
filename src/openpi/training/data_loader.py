@@ -231,6 +231,75 @@ class FilteredDataset(Dataset[T_co]):
         return len(self._valid_indices)
 
 
+class EpisodeFilteredDataset(Dataset[T_co]):
+    """A dataset that keeps only samples belonging to a specific set of episode IDs."""
+
+    def __init__(self, dataset: Dataset, episode_ids: Sequence[int], lerobot_dataset=None):
+        self._dataset = dataset
+        self._episode_ids = set(episode_ids)
+        self._valid_indices = self._build_index(lerobot_dataset)
+
+    def _build_index(self, lerobot_dataset) -> list[int]:
+        logging.info(f"Filtering dataset to episode IDs: {sorted(self._episode_ids)}")
+
+        # Fast path: use the raw LeRobot hf_dataset to look up episode_index,
+        # but iterate over the *wrapped* dataset's index space.
+        if lerobot_dataset is not None and hasattr(lerobot_dataset, 'hf_dataset'):
+            hf_dataset = lerobot_dataset.hf_dataset
+            if 'episode_index' in hf_dataset.column_names:
+                episode_indices = hf_dataset['episode_index']
+
+                # If the wrapped dataset is a FilteredDataset, map through its valid_indices
+                # to get the original LeRobot sample index for each wrapped index.
+                if isinstance(self._dataset, FilteredDataset):
+                    inner_indices = self._dataset._valid_indices
+                    valid_indices = [
+                        i for i, orig_idx in enumerate(inner_indices)
+                        if int(episode_indices[orig_idx]) in self._episode_ids
+                    ]
+                else:
+                    valid_indices = [
+                        i for i, ep_idx in enumerate(episode_indices)
+                        if int(ep_idx) in self._episode_ids
+                    ]
+
+                # Log which episodes were actually found
+                if isinstance(self._dataset, FilteredDataset):
+                    found_eps = sorted({int(episode_indices[inner_indices[i]]) for i in valid_indices})
+                else:
+                    found_eps = sorted({int(episode_indices[i]) for i in valid_indices})
+                missing_eps = sorted(self._episode_ids - set(found_eps))
+                logging.info(
+                    f"\n=== EpisodeFilteredDataset ===\n"
+                    f"  Requested episode IDs: {sorted(self._episode_ids)}\n"
+                    f"  Found episode IDs:     {found_eps}\n"
+                    f"  Missing episode IDs:   {missing_eps}\n"
+                    f"  Samples kept: {len(valid_indices)} / {len(self._dataset)}\n"
+                    f"{'=' * 50}"
+                )
+                return valid_indices
+
+        # Slow fallback: load each sample and check
+        logging.info("EpisodeFilteredDataset: using slow path (no episode_index column)")
+        valid_indices = []
+        for i in range(len(self._dataset)):
+            sample = self._dataset[i]
+            ep_idx = sample.get('episode_index', None)
+            if ep_idx is not None and int(ep_idx) in self._episode_ids:
+                valid_indices.append(i)
+        logging.info(
+            f"EpisodeFilteredDataset (slow): {len(valid_indices)} / {len(self._dataset)} samples"
+        )
+        return valid_indices
+
+    def __getitem__(self, index: SupportsIndex) -> T_co:
+        actual_index = self._valid_indices[index.__index__()]
+        return self._dataset[actual_index]
+
+    def __len__(self) -> int:
+        return len(self._valid_indices)
+
+
 class TransformedDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
         self._dataset = dataset
@@ -388,6 +457,77 @@ class LiberoProHDF5Dataset(Dataset):
         }
 
 
+class RobomimicHDF5Dataset(Dataset):
+    """Dataset that reads directly from a robomimic image HDF5 file.
+
+    Expects an HDF5 produced by robomimic's ``dataset_states_to_obs.py`` with
+    ``--camera_names agentview robot0_eye_in_hand``.
+
+    Returns items with keys:
+      - image:       agentview camera   (H, W, 3) uint8
+      - wrist_image: wrist camera       (H, W, 3) uint8
+      - state:       eef_pos (3) + eef_quat (4) + gripper_qpos (2) → (9,) float32
+      - actions:     (action_horizon, 7) float32
+      - prompt:      task language instruction string
+    """
+
+    def __init__(self, hdf5_path: str, action_horizon: int, task_description: str, num_episodes: int = -1):
+        self._action_horizon = action_horizon
+        self._prompt = task_description
+        self._samples: list[tuple[str, int]] = []
+        self._data: dict = {}
+
+        with h5py.File(hdf5_path, "r") as f:
+            demo_keys = sorted(f["data"].keys(), key=lambda x: int(x.split("_")[1]))
+            if num_episodes > 0:
+                demo_keys = demo_keys[:num_episodes]
+
+            logging.info(f"RobomimicHDF5Dataset: loading {len(demo_keys)} episodes from {hdf5_path}")
+
+            for demo_key in demo_keys:
+                demo = f["data"][demo_key]
+                T = demo["actions"].shape[0]
+                self._data[demo_key] = {
+                    "agentview_image": demo["obs/agentview_image"][:],
+                    "wrist_image": demo["obs/robot0_eye_in_hand_image"][:],
+                    "eef_pos": demo["obs/robot0_eef_pos"][:].astype(np.float32),
+                    "eef_quat": demo["obs/robot0_eef_quat"][:].astype(np.float32),
+                    "gripper_qpos": demo["obs/robot0_gripper_qpos"][:].astype(np.float32),
+                    "actions": demo["actions"][:].astype(np.float32),
+                }
+                for t in range(T):
+                    self._samples.append((demo_key, t))
+
+        logging.info(
+            f"RobomimicHDF5Dataset: {len(demo_keys)} episodes, {len(self._samples)} timestep samples, "
+            f"prompt='{self._prompt}'"
+        )
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    def __getitem__(self, index: SupportsIndex) -> dict:
+        demo_key, t = self._samples[index.__index__()]
+        data = self._data[demo_key]
+        T = data["actions"].shape[0]
+
+        actions = np.empty((self._action_horizon, 7), dtype=np.float32)
+        for i in range(self._action_horizon):
+            actions[i] = data["actions"][min(t + i, T - 1)]
+
+        state = np.concatenate([
+            data["eef_pos"][t], data["eef_quat"][t], data["gripper_qpos"][t]
+        ], axis=-1)  # (9,)
+
+        return {
+            "image": data["agentview_image"][t],
+            "wrist_image": data["wrist_image"][t],
+            "state": state,
+            "actions": actions,
+            "prompt": self._prompt,
+        }
+
+
 class ConcatDataset(Dataset):
     """Concatenates multiple datasets into one."""
 
@@ -435,6 +575,15 @@ def create_torch_dataset(
         else:
             raise ValueError("data_dirs is empty")
 
+    # Robomimic HDF5-only dataset loading
+    if repo_id == "robomimic":
+        hdf5_path = data_config.hdf5_path
+        if hdf5_path is None:
+            raise ValueError("robomimic config requires hdf5_path to be set.")
+        return RobomimicHDF5Dataset(
+            hdf5_path, action_horizon, data_config.task_description, data_config.hdf5_num_episodes
+        )
+
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
 
@@ -453,6 +602,13 @@ def create_torch_dataset(
         },
     )
 
+    # Validate: episode_ids and num_episodes cannot be used together
+    if data_config.episode_ids and data_config.num_episodes > 0:
+        raise ValueError(
+            "Cannot specify both 'episode_ids' and 'num_episodes'. "
+            "Use 'episode_ids' to select specific episodes, or 'num_episodes' to limit the count, but not both."
+        )
+
     # Apply prompt filtering BEFORE transforms for efficiency
     dataset = lerobot_ds
     if data_config.filter_prompt is not None:
@@ -464,6 +620,10 @@ def create_torch_dataset(
             num_episodes=data_config.num_episodes,
             exclude_filter_prompt=data_config.exclude_filter_prompt,
         )
+
+    # Apply episode ID filtering AFTER prompt filtering so it operates on the correct subset
+    if data_config.episode_ids:
+        dataset = EpisodeFilteredDataset(dataset, data_config.episode_ids, lerobot_dataset=lerobot_ds)
     
     # Apply transforms after filtering
     if data_config.prompt_from_task:

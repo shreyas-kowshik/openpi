@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=8:00:00
-#SBATCH --partition=preempt
+#SBATCH --partition=general
 #SBATCH --output=/data/user_data/%u/openpi-libero10/logs/%x_%j.out
 #SBATCH --error=/data/user_data/%u/openpi-libero10/logs/%x_%j.err
 
