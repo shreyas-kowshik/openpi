@@ -259,7 +259,8 @@ def main():
             ep_id = dataset.trajectory_ids[i]
             ep_len = dataset.trajectory_lengths[i]
             meta = groot_ds.get_ep_meta_for_episode(ds_path, ep_id)
-            obj_cat = meta.get("object_cfgs", [{}])[0].get("info", {}).get("cat", "?")
+            obj_cfgs = meta.get("object_cfgs", [])
+            obj_cat = obj_cfgs[0].get("info", {}).get("cat", "?") if obj_cfgs else "none"
             logging.info(
                 f"  Episode {ep_id}: {ep_len} frames, "
                 f"layout={meta.get('layout_id')}, style={meta.get('style_id')}, obj={obj_cat}"
@@ -278,7 +279,8 @@ def main():
         for traj_idx in traj_indices:
             ep_id = dataset.trajectory_ids[traj_idx]
             meta = groot_ds.get_ep_meta_for_episode(ds_path, ep_id)
-            obj_cat = meta.get("object_cfgs", [{}])[0].get("info", {}).get("cat", "unknown")
+            obj_cfgs = meta.get("object_cfgs", [])
+            obj_cat = obj_cfgs[0].get("info", {}).get("cat", "unknown") if obj_cfgs else "none"
             layout_id = meta.get("layout_id", "?")
             style_id = meta.get("style_id", "?")
 

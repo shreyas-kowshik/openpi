@@ -268,7 +268,8 @@ def main(config: _config.TrainConfig):
             )
             ref_path = config.checkpoint_dir / "reference_ep_meta.json"
             ref_path.write_text(_json.dumps(ref_ep_meta, indent=2))
-            ref_obj = ref_ep_meta.get("object_cfgs", [{}])[0].get("info", {}).get("cat", "N/A")
+            obj_cfgs = ref_ep_meta.get("object_cfgs", [])
+            ref_obj = obj_cfgs[0].get("info", {}).get("cat", "N/A") if obj_cfgs else "none"
             ref_fxrefs = ref_ep_meta.get("fixture_refs", {})
             all_objs = [c.get("info", {}).get("cat", "?") for c in ref_ep_meta.get("object_cfgs", [])]
             logging.info(

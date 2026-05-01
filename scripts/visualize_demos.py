@@ -141,20 +141,25 @@ def _get_episode_groups(dataset) -> list[tuple[str, list[int]]]:
 def main(
     config_name: str,
     output_dir: str = "./data_dumps/viz",
-    num_episodes_to_dump: int = 5,
+    num_episodes_to_dump: int | None = None,
     fps: int = 10,
 ):
+    """Dump training episodes as .mp4 videos.
+
+    Args:
+        config_name: Training config name (e.g. pi05_robocasa_single_task_lora_turn_on_sink_faucet).
+        output_dir: Root output directory for videos.
+        num_episodes_to_dump: Max episodes to dump. None = all episodes.
+        fps: Video frame rate.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
     config = _config.get_config(config_name)
     data_config = config.data.create(config.assets_dirs, config.model)
 
-    # num_episodes_to_dump controls how many episodes to visualize.
-    # data_config.num_episodes controls dataset filtering (not visualization), so don't cap by it.
     max_episodes = num_episodes_to_dump
 
     logging.info(f"Config: {config_name}")
-    logging.info(f"Will dump up to {max_episodes} episodes to {output_dir}")
 
     # Create the raw dataset (same as training, before repack/model transforms).
     dataset = _data_loader.create_torch_dataset(data_config, config.model.action_horizon, config.model)
@@ -165,6 +170,10 @@ def main(
 
     # Pre-compute episode boundaries from dataset structure.
     episode_groups = _get_episode_groups(dataset)
+
+    if max_episodes is None:
+        max_episodes = len(episode_groups)
+
     logging.info(f"Found {len(episode_groups)} episodes in dataset, dumping {max_episodes}")
 
     for ep_num, (label, indices) in enumerate(episode_groups[:max_episodes]):
