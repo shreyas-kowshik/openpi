@@ -1,16 +1,25 @@
 """Visualize demo episodes from a training config as .mp4 videos.
 
-Iterates through the raw dataset (before repack/model transforms) and dumps
-each episode as an mp4 with side-by-side base + wrist camera views.
+By default iterates through the raw dataset (before transforms). Use
+``--apply-transforms`` to apply repack + data transforms so the video shows
+exactly the images that go into the model during training.
 
 Usage:
     uv run scripts/visualize_demos.py \
-        --config-name pi05_libero_lora_vision_fullft_action_placebookincaddy_task_ep1_bs32_v2_icml_v2 \
+        --config-name pi0_libero10_hdf5 \
         --output-dir ./data_dumps/viz \
         --num-episodes-to-dump 3
+
+    # To see post-transform output (what the model actually receives):
+    uv run scripts/visualize_demos.py \
+        --config-name pi0_libero10_hdf5 \
+        --output-dir ./data_dumps/viz \
+        --num-episodes-to-dump 3 \
+        --apply-transforms
 """
 
 import logging
+import os
 import pathlib
 
 import cv2
@@ -18,8 +27,17 @@ import imageio
 import numpy as np
 import tyro
 
+# Ensure the download cache dir is writable (the default may point to a
+# restricted path like /data/...).  Set a fallback before any openpi imports
+# so the tokenizer download doesn't crash.
+if "OPENPI_DATA_HOME" not in os.environ:
+    _fallback = pathlib.Path.home() / ".cache" / "openpi"
+    _fallback.mkdir(parents=True, exist_ok=True)
+    os.environ["OPENPI_DATA_HOME"] = str(_fallback)
+
 import openpi.training.config as _config
 import openpi.training.data_loader as _data_loader
+import openpi.transforms as _transforms
 
 
 def _to_uint8_hwc(image) -> np.ndarray:
@@ -33,7 +51,11 @@ def _to_uint8_hwc(image) -> np.ndarray:
 
 
 def _get_image(sample: dict) -> np.ndarray:
-    """Extract the base camera image from a raw sample."""
+    """Extract the base camera image from a raw or transformed sample."""
+    # Post data-transform keys (nested under "image" dict).
+    if "image" in sample and isinstance(sample["image"], dict):
+        return _to_uint8_hwc(sample["image"]["base_0_rgb"])
+    # Raw dataset keys.
     for key in ("image", "observation/image"):
         if key in sample:
             return _to_uint8_hwc(sample[key])
@@ -41,7 +63,14 @@ def _get_image(sample: dict) -> np.ndarray:
 
 
 def _get_wrist_image(sample: dict) -> np.ndarray | None:
-    """Extract the wrist camera image from a raw sample."""
+    """Extract the wrist camera image from a raw or transformed sample."""
+    # Post data-transform keys.
+    if "image" in sample and isinstance(sample["image"], dict):
+        img = sample["image"].get("left_wrist_0_rgb")
+        if img is not None:
+            return _to_uint8_hwc(img)
+        return None
+    # Raw dataset keys.
     for key in ("wrist_image", "observation/wrist_image"):
         if key in sample:
             return _to_uint8_hwc(sample[key])
@@ -124,6 +153,15 @@ def _get_episode_groups(dataset) -> list[tuple[str, list[int]]]:
             demo_groups.setdefault(demo_key, []).append(idx)
         return [(f"hdf5_{dk}", indices) for dk, indices in demo_groups.items()]
 
+    # -- Libero10HDF5Dataset: group by (file_idx, demo_key) --
+    if isinstance(dataset, _data_loader.Libero10HDF5Dataset):
+        from collections import OrderedDict
+        demo_groups_l10: dict[str, list[int]] = OrderedDict()
+        for idx, (file_idx, demo_key, _t) in enumerate(dataset._samples):
+            label = f"file{file_idx}_{demo_key}"
+            demo_groups_l10.setdefault(label, []).append(idx)
+        return [(label, indices) for label, indices in demo_groups_l10.items()]
+
     # -- LeRobot dataset: group by episode_index --
     if hasattr(dataset, 'hf_dataset') and 'episode_index' in dataset.hf_dataset.column_names:
         from collections import OrderedDict
@@ -140,19 +178,24 @@ def _get_episode_groups(dataset) -> list[tuple[str, list[int]]]:
 
 def main(
     config_name: str,
-    output_dir: str = "./data_dumps/viz",
+    output_dir: str = "./data_dumps/libero10_hdf5",
     num_episodes_to_dump: int | None = None,
     fps: int = 10,
+    apply_transforms: bool = False,
 ):
     """Dump training episodes as .mp4 videos.
 
     Args:
-        config_name: Training config name (e.g. pi05_robocasa_single_task_lora_turn_on_sink_faucet).
+        config_name: Training config name (e.g. pi0_libero10_hdf5).
         output_dir: Root output directory for videos.
         num_episodes_to_dump: Max episodes to dump. None = all episodes.
         fps: Video frame rate.
+        apply_transforms: If True, apply repack + data transforms so videos show
+            exactly what the model receives during training (before normalization
+            and tokenization).
     """
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    # force=True is needed because robosuite imports configure logging before us.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
 
     config = _config.get_config(config_name)
     data_config = config.data.create(config.assets_dirs, config.model)
@@ -162,14 +205,25 @@ def main(
     logging.info(f"Config: {config_name}")
 
     # Create the raw dataset (same as training, before repack/model transforms).
-    dataset = _data_loader.create_torch_dataset(data_config, config.model.action_horizon, config.model)
-    logging.info(f"Dataset size: {len(dataset)} samples")
+    raw_dataset = _data_loader.create_torch_dataset(data_config, config.model.action_horizon, config.model)
+    logging.info(f"Dataset size: {len(raw_dataset)} samples")
+
+    # Optionally wrap with repack + data transforms (skip normalization + model transforms).
+    if apply_transforms:
+        transform_fns = [
+            *data_config.repack_transforms.inputs,
+            *data_config.data_transforms.inputs,
+        ]
+        dataset = _data_loader.TransformedDataset(raw_dataset, transform_fns)
+        logging.info("Applying repack + data transforms for visualization")
+    else:
+        dataset = raw_dataset
 
     out_dir = pathlib.Path(output_dir) / config_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Pre-compute episode boundaries from dataset structure.
-    episode_groups = _get_episode_groups(dataset)
+    # Pre-compute episode boundaries from the raw dataset structure.
+    episode_groups = _get_episode_groups(raw_dataset)
 
     if max_episodes is None:
         max_episodes = len(episode_groups)

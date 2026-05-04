@@ -117,6 +117,13 @@ class DataConfig:
     # Task description for HDF5-only datasets (e.g. robomimic) that don't have embedded language annotations.
     task_description: str = ""
 
+    # Directory containing LIBERO-10 HDF5 files (one .hdf5 per task).
+    libero10_data_dir: str | None = None
+    # Whether to flip LIBERO images (robosuite stores images flipped).
+    flip_images: bool = True
+    # If set, only load these specific HDF5 filenames from the libero10 data dir.
+    hdf5_filenames: Sequence[str] | None = None
+
     # Groot/RoboCasa dataset directories (list of dicts with 'path' and 'filter_key' keys).
     data_dirs: list[dict] | None = None
     # Sampling weights for multi-dataset training.
@@ -492,6 +499,70 @@ class LiberoProHDF5DataConfig(LeRobotLiberoDataConfig):
         # Delegate to parent to get the full LeRobot transform pipeline, then inject hdf5_path.
         base = super().create(assets_dirs, model_config)
         return dataclasses.replace(base, hdf5_path=self.hdf5_path, hdf5_num_episodes=self.hdf5_num_episodes)
+
+
+@dataclasses.dataclass(frozen=True)
+class Libero10HDF5DataConfig(DataConfigFactory):
+    """Data config for loading original LIBERO-10 benchmark HDF5 files directly.
+
+    Points at a directory containing 10 ``.hdf5`` files (one per task) as produced
+    by the LIBERO download script.
+
+    Usage example::
+
+        Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+        )
+    """
+
+    repo_id: str = "libero_10_hdf5"
+    # Directory containing the LIBERO-10 .hdf5 files.
+    data_dir: str = tyro.MISSING
+    # Number of episodes to load per task. -1 means load all.
+    num_episodes_per_task: int = -1
+    # Whether to flip images (robosuite stores images flipped).
+    flip_images: bool = True
+    # Only load files whose language instruction contains this substring (case-insensitive).
+    filter_prompt: str | None = None
+    # Only load these specific HDF5 filenames from data_dir.
+    hdf5_filenames: Sequence[str] | None = None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack dataset keys (image, wrist_image, state) to the observation/* keys
+        # that LiberoInputs expects.
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/image": "image",
+                        "observation/wrist_image": "wrist_image",
+                        "observation/state": "state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[libero_policy.LiberoInputs(model_type=model_config.model_type)],
+            outputs=[libero_policy.LiberoOutputs()],
+        )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            libero10_data_dir=self.data_dir,
+            hdf5_num_episodes=self.num_episodes_per_task,
+            flip_images=self.flip_images,
+            filter_prompt=self.filter_prompt,
+            hdf5_filenames=self.hdf5_filenames,
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -965,6 +1036,26 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
         # Check the base TrainConfig class for a full list of available hyperparameters.
+        num_train_steps=30_000,
+    ),
+    TrainConfig(
+        name="pi0_libero10_hdf5",
+        model=pi0_config.Pi0Config(),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["STUDY_SCENE1_pick_up_the_book_and_place_it_in_the_back_compartment_of_the_caddy_demo.hdf5"],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=30_000,
+    ),
+    TrainConfig(
+        name="pi0_libero10_hdf5_both_mokapots",
+        model=pi0_config.Pi0Config(),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["KITCHEN_SCENE8_put_both_moka_pots_on_the_stove_demo.hdf5"],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         num_train_steps=30_000,
     ),
     TrainConfig(
@@ -3997,6 +4088,98 @@ _CONFIGS = [
                 num_episodes=-1,
             ),
             extra_delta_transform=False,
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    # ---- full_data HDF5 variants (load directly from LIBERO-10 HDF5 files) ----
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_full_data_hdf5_libero10",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["KITCHEN_SCENE8_put_both_moka_pots_on_the_stove_demo.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_full_data_hdf5_libero10",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket_demo.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_full_data_hdf5_libero10",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["KITCHEN_SCENE4_put_the_black_bowl_in_the_bottom_drawer_of_the_cabinet_and_close_it_demo.hdf5"],
         ),
         assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
         checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",

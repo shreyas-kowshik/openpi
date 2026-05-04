@@ -457,6 +457,152 @@ class LiberoProHDF5Dataset(Dataset):
         }
 
 
+class Libero10HDF5Dataset(Dataset):
+    """Dataset that reads from original LIBERO benchmark HDF5 files (one file per task).
+
+    Scans a directory for ``.hdf5`` files (e.g. the ``libero_10/`` folder produced by the
+    LIBERO download script) and loads all demos from every file.  Each file corresponds
+    to a single task; the language instruction is extracted from the ``problem_info``
+    attribute stored inside the HDF5.
+
+    Returns items with the same keys as ``LiberoProHDF5Dataset`` so the standard Libero
+    repack / data transforms work without modification:
+      - image:       agentview camera   (H, W, 3) uint8
+      - wrist_image: wrist camera       (H, W, 3) uint8
+      - state:       ee_states (6,) concat gripper_states (2,) → (8,) float32
+      - actions:     (action_horizon, 7) float32, last action padded at episode end
+      - prompt:      task language instruction string
+    """
+
+    def __init__(
+        self,
+        data_dir: str,
+        action_horizon: int,
+        num_episodes_per_task: int = -1,
+        flip_images: bool = True,
+        filter_prompt: str | None = None,
+        hdf5_filenames: Sequence[str] | None = None,
+    ):
+        """
+        Args:
+            data_dir: Directory containing LIBERO .hdf5 files.
+            action_horizon: Number of future actions to chunk per sample.
+            num_episodes_per_task: Max demos to load per file (-1 = all).
+            flip_images: Flip images (robosuite stores them flipped).
+            filter_prompt: If set, only load files whose language instruction
+                contains this substring (case-insensitive).
+            hdf5_filenames: If set, only load these specific filenames
+                (e.g. ``["KITCHEN_SCENE8_put_both_moka_pots_on_the_stove_demo.hdf5"]``).
+        """
+        import json as _json
+        import glob as _glob
+
+        self._action_horizon = action_horizon
+        self._flip_images = flip_images
+        # (file_idx, demo_key, timestep) → flat sample index
+        self._samples: list[tuple[int, str, int]] = []
+        # file_idx → {demo_key → {arrays}}
+        self._file_data: list[dict] = []
+        # file_idx → prompt string
+        self._file_prompts: list[str] = []
+
+        if hdf5_filenames:
+            hdf5_paths = sorted([os.path.join(data_dir, fn) for fn in hdf5_filenames])
+            missing = [p for p in hdf5_paths if not os.path.isfile(p)]
+            if missing:
+                raise FileNotFoundError(f"HDF5 files not found: {missing}")
+        else:
+            hdf5_paths = sorted(_glob.glob(os.path.join(data_dir, "*.hdf5")))
+        if not hdf5_paths:
+            raise FileNotFoundError(f"No .hdf5 files found in {data_dir}")
+
+        total_demos = 0
+        for hdf5_path in hdf5_paths:
+            with h5py.File(hdf5_path, "r") as f:
+                # Extract language instruction from problem_info attribute.
+                raw_info = f["data"].attrs.get("problem_info", "")
+                try:
+                    info = _json.loads(raw_info)
+                    lang = info.get("language_instruction", "")
+                    if isinstance(lang, list):
+                        lang = "".join(lang)
+                    prompt = lang.strip('"').strip()
+                except Exception:
+                    prompt = str(raw_info)
+
+                # Skip this file if it doesn't match the filter_prompt.
+                if filter_prompt is not None and filter_prompt.lower() not in prompt.lower():
+                    logging.info(
+                        f"Libero10HDF5Dataset: skipping {os.path.basename(hdf5_path)} "
+                        f"(prompt '{prompt}' doesn't match filter '{filter_prompt}')"
+                    )
+                    continue
+
+                demo_keys = sorted([k for k in f["data"].keys() if k.startswith("demo")])
+                if num_episodes_per_task > 0:
+                    demo_keys = demo_keys[:num_episodes_per_task]
+
+                # Use current list length as the file index (accounts for skipped files).
+                file_idx = len(self._file_data)
+                file_data: dict = {}
+                for demo_key in demo_keys:
+                    demo = f["data"][demo_key]
+                    T = demo["actions"].shape[0]
+                    file_data[demo_key] = {
+                        "agentview_rgb": demo["obs/agentview_rgb"][:],
+                        "eye_in_hand_rgb": demo["obs/eye_in_hand_rgb"][:],
+                        "ee_states": demo["obs/ee_states"][:].astype(np.float32),
+                        "gripper_states": demo["obs/gripper_states"][:].astype(np.float32),
+                        "actions": demo["actions"][:].astype(np.float32),
+                    }
+                    for t in range(T):
+                        self._samples.append((file_idx, demo_key, t))
+
+                total_demos += len(demo_keys)
+                self._file_data.append(file_data)
+                self._file_prompts.append(prompt)
+
+                logging.info(
+                    f"Libero10HDF5Dataset: loaded {len(demo_keys)} demos from "
+                    f"{os.path.basename(hdf5_path)}, prompt='{prompt}'"
+                )
+
+        logging.info(
+            f"Libero10HDF5Dataset: {len(hdf5_paths)} files, {total_demos} total demos, "
+            f"{len(self._samples)} timestep samples"
+        )
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    def __getitem__(self, index: SupportsIndex) -> dict:
+        file_idx, demo_key, t = self._samples[index.__index__()]
+        data = self._file_data[file_idx][demo_key]
+        T = data["actions"].shape[0]
+
+        # Build action chunk [t, t+action_horizon); pad with last action at episode end.
+        act_dim = data["actions"].shape[-1]
+        actions = np.empty((self._action_horizon, act_dim), dtype=np.float32)
+        for i in range(self._action_horizon):
+            actions[i] = data["actions"][min(t + i, T - 1)]
+
+        state = np.concatenate([data["ee_states"][t], data["gripper_states"][t]], axis=-1)
+
+        image = data["agentview_rgb"][t]
+        wrist_image = data["eye_in_hand_rgb"][t]
+        if self._flip_images:
+            image = image[::-1, ::-1].copy()
+            wrist_image = wrist_image[::-1, ::-1].copy()
+
+        return {
+            "image": image,
+            "wrist_image": wrist_image,
+            "state": state,
+            "actions": actions,
+            "prompt": self._file_prompts[file_idx],
+        }
+
+
 class RobomimicHDF5Dataset(Dataset):
     """Dataset that reads directly from a robomimic image HDF5 file.
 
@@ -582,6 +728,20 @@ def create_torch_dataset(
             raise ValueError("robomimic config requires hdf5_path to be set.")
         return RobomimicHDF5Dataset(
             hdf5_path, action_horizon, data_config.task_description, data_config.hdf5_num_episodes
+        )
+
+    # LIBERO-10 HDF5 directory loading
+    if repo_id == "libero_10_hdf5":
+        libero10_dir = getattr(data_config, "libero10_data_dir", None)
+        if libero10_dir is None:
+            raise ValueError("libero_10_hdf5 config requires libero10_data_dir to be set.")
+        return Libero10HDF5Dataset(
+            data_dir=libero10_dir,
+            action_horizon=action_horizon,
+            num_episodes_per_task=data_config.hdf5_num_episodes,
+            flip_images=getattr(data_config, "flip_images", True),
+            filter_prompt=data_config.filter_prompt,
+            hdf5_filenames=getattr(data_config, "hdf5_filenames", None),
         )
 
     if repo_id is None:
