@@ -4174,6 +4174,36 @@ _CONFIGS = [
         enforce_min_quantile_range=True,
     ),
     TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_clear_clutter",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/expert_hdf5",
+            hdf5_filenames=["libero10_task0_clear_clutter_ep1.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
         name="pi05_libero10_black_bowl_bottom_drawer_full_data_hdf5_libero10",
         model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
                                     action_horizon=10, discrete_state_input=False),
@@ -4196,6 +4226,126 @@ _CONFIGS = [
             decay_lr=2.5e-6,
         ),
         batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    ###########################
+
+    # ---- VISION_MERGE_ACTION_INIT: 1-demo fine-tuning from merged checkpoints ----
+    # These configs train on exactly 1 demo, initialized from merged checkpoints
+    # (VLM from full_data task checkpoint + action/diffusion from pi05 base).
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep1_VISION_MERGE_ACTION_INIT",
+        wandb_entity="skowshik-carnegie-mellon-university",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                episode_ids=[86],
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data/hf_cache/models/pi05_merged_checkpoints/pi05_libero10_both_mokapots_stove_full_data_hdf5_libero10_VISION_MERGE_ACTION_INIT/params"
+        ),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=64,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_VISION_MERGE_ACTION_INIT",
+        wandb_entity="skowshik-carnegie-mellon-university",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the tomato sauce in the basket",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data/hf_cache/models/pi05_merged_checkpoints/pi05_libero10_alphabet_soup_tomato_sauce_basket_full_data_hdf5_libero10_VISION_MERGE_ACTION_INIT/params"
+        ),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=64,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_ep1_VISION_MERGE_ACTION_INIT",
+        wandb_entity="skowshik-carnegie-mellon-university",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the black bowl in the bottom drawer of the cabinet and close it",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data/hf_cache/models/pi05_merged_checkpoints/pi05_libero10_black_bowl_bottom_drawer_full_data_hdf5_libero10_VISION_MERGE_ACTION_INIT/params"
+        ),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=64,
         log_interval=50,
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
@@ -4805,11 +4955,11 @@ _CONFIGS = [
         ),
         data=LeRobotRobocasaDataConfig(
             assets=AssetsConfig(
-                assets_dir=None,
+                assets_dir="/data/user_data/sreyasv/Repos/batch_value_learning/assets/pi05_robocasa_rlds_comp_set",
                 asset_id="robocasa",
             ),
             data_dirs=[{
-                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/atomic/PickPlaceCounterToCabinet/20250819/lerobot",
+                "path": "/data/group_data/maxlab/common_datasets/sreyasv/robocasa/v1.0/target/atomic/PickPlaceCounterToCabinet/20250811/lerobot",
                 "filter_key": None,
             }],
             layout_and_style_ids=[(1, 1)],
@@ -5544,6 +5694,596 @@ _CONFIGS = [
         ).get_freeze_filter(),
         num_workers=0,
         enforce_min_quantile_range=True,
+    ),
+    # KettleBoiling (composite, horizon=1000) — ep 0: layout=37, style=37
+    # Pick kettle from counter → place on stove burner → turn burner on
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_kettle_boiling_action_dim12",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/KettleBoiling/20250725/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(37, 37)],
+            fixture_refs={"stove": "stovetop_left_group_1", "counter": "counter_1_left_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # WashLettuce (composite, horizon=1100) — ep 0: layout=38, style=47
+    # Wash lettuce in the sink by running water over it
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_wash_lettuce_action_dim12",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/WashLettuce/20250723/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(38, 47)],
+            fixture_refs={"sink": "sink_main_group_1", "counter": "counter_1_main_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # WashLettuce with all 3 camera views (agentview_left, agentview_right, eye_in_hand)
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_wash_lettuce_action_dim12_rightview_added",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/WashLettuce/20250723/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(38, 47)],
+            fixture_refs={"sink": "sink_main_group_1", "counter": "counter_1_main_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # WashLettuce with all 3 camera views + discrete_state_input
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_wash_lettuce_action_dim12_rightview_added_discrete_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/WashLettuce/20250723/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(38, 47)],
+            fixture_refs={"sink": "sink_main_group_1", "counter": "counter_1_main_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # LoadDishwasher — dump 20 unfiltered demos for visualization
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_load_dishwasher_dump20",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/LoadDishwasher/20250717/lerobot",
+                "filter_key": None,
+            }],
+            num_demos=20,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # LoadDishwasher — load dishes into the dishwasher
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_load_dishwasher_action_dim12",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/LoadDishwasher/20250717/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(59, 36)],
+            fixture_refs={"dishwasher": "dishwasher_1_island_group_1", "counter": "island_island_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # LoadDishwasher with discrete_state_input
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_load_dishwasher_action_dim12_discrete_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/LoadDishwasher/20250717/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(59, 36)],
+            fixture_refs={"dishwasher": "dishwasher_1_island_group_1", "counter": "island_island_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # WashLettuce (composite, horizon=1100) — ep 0: layout=38, style=47
+    # Wash lettuce in the sink by running water over it
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_wash_lettuce",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/WashLettuce/20250723/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(38, 47)],
+            fixture_refs={"sink": "sink_main_group_1", "counter": "counter_1_main_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — ep 4: layout=25, style=29
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l25_s29",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(25, 29)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group", "cab": "cab_4_main_group"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — ep 4: layout=25, style=29 — discrete state
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l25_s29_discrete_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(25, 29)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group", "cab": "cab_4_main_group"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — ep 5: layout=50, style=53
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l50_s53",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(50, 53)],
+            fixture_refs={"coffee_machine": "coffee_machine_right_group_1", "cab": "hingecabinet_3_right_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — ep 5: layout=50, style=53 — discrete state
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l50_s53_discrete_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(50, 53)],
+            fixture_refs={"coffee_machine": "coffee_machine_right_group_1", "cab": "hingecabinet_3_right_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — ep 22: layout=58, style=37
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l58_s37",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(58, 37)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group_1", "cab": "hingecabinet_1_main_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — ep 22: layout=58, style=37 — discrete state
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l58_s37_discrete_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(58, 37)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group_1", "cab": "hingecabinet_1_main_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PickPlaceFridgeDrawerToShelf (atomic) — ep 40: layout=50, style=37
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_pick_place_fridge_drawer_to_shelf_l50_s37",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/atomic/PickPlaceFridgeDrawerToShelf/20250821/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(50, 37)],
+            fixture_refs={"fridge": "fridgefrenchdoor_left_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PickPlaceCounterToCabinet (atomic) — layout=1, style=1, exact_state_replay eval
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_counter_to_cabinet_exact_replay",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/target/atomic/PickPlaceCounterToCabinet/20250811/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(1, 1)],
+            num_demos=1,
+            eval_init_mode="exact_state_replay",
+            eval_pool_episode_ids=[32],
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.1,
+            eval_object_pose_noise=0.1,
+            eval_object_ori_noise=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
     ),
 ]
 

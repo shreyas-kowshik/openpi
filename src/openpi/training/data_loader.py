@@ -8,7 +8,7 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 import h5py
 import jax
 import jax.numpy as jnp
-import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
+import lerobot.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
 

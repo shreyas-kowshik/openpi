@@ -13,6 +13,7 @@ def make_robocasa_example() -> dict:
         "observation/state": np.random.rand(16),
         "observation/image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "observation/wrist_image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
+        "observation/image_right": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "prompt": "do something",
     }
 
@@ -40,18 +41,19 @@ class RobocasaInputs(transforms.DataTransformFn):
 
         base_image = _parse_image(data["observation/image"])
         wrist_image = _parse_image(data["observation/wrist_image"])
+        right_image = _parse_image(data["observation/image_right"])
 
         inputs = {
             "state": state,
             "image": {
                 "base_0_rgb": base_image,
                 "left_wrist_0_rgb": wrist_image,
-                "right_wrist_0_rgb": np.zeros_like(base_image),
+                "right_wrist_0_rgb": right_image,
             },
             "image_mask": {
                 "base_0_rgb": np.True_,
                 "left_wrist_0_rgb": np.True_,
-                "right_wrist_0_rgb": np.False_ if mask_padding else np.True_,
+                "right_wrist_0_rgb": np.True_,
             },
         }
 

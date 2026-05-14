@@ -206,14 +206,32 @@ class GrootOpenpiSingleDataset(LeRobotSingleDataset):
         }
 
         # Scene filtering: restrict by layout/style, fixture refs, object categories, episode IDs
+        # Resolve match_episode_id: load reference ep_meta and derive filters
+        match_episode_id = dataset_meta.get("match_episode_id")
         layout_and_style_ids = dataset_meta.get("layout_and_style_ids")
+        fixture_refs = dataset_meta.get("fixture_refs")
+        object_categories = dataset_meta.get("object_categories")
+        obj_category = dataset_meta.get("obj_category")
         num_demos = dataset_meta.get("num_demos")
+
+        if match_episode_id is not None:
+            ref_meta = load_ep_meta(dataset_path, match_episode_id)
+            layout_and_style_ids = [(ref_meta["layout_id"], ref_meta["style_id"])]
+            fixture_refs = ref_meta.get("fixture_refs") or None
+            # match_episode_id matches scene geometry only (layout + style +
+            # fixture positions). Object categories are NOT matched because
+            # they vary randomly per episode even within the same scene.
+
+        # Convert singular obj_category to list form
+        if obj_category is not None and object_categories is None:
+            object_categories = [obj_category]
+
         subset_demos = None
         if layout_and_style_ids is not None:
             subset_demos = get_scene_filtered_demos(
                 dataset_path, layout_and_style_ids, num_demos,
-                fixture_refs=dataset_meta.get("fixture_refs"),
-                object_categories=dataset_meta.get("object_categories"),
+                fixture_refs=fixture_refs,
+                object_categories=object_categories,
                 episode_ids=dataset_meta.get("episode_ids"),
             )
 
@@ -249,6 +267,7 @@ class GrootOpenpiSingleDataset(LeRobotSingleDataset):
         new_item = {
             "observation/image": item["video.robot0_agentview_left"][0],
             "observation/wrist_image": item["video.robot0_eye_in_hand"][0],
+            "observation/image_right": item["video.robot0_agentview_right"][0],
             "observation/state": state[0],
             "actions": actions,
             "prompt": item["annotation.human.task_description"][0], # TODO: Soroush change this later to task_description
@@ -386,6 +405,7 @@ class GrootOpenpiMultiDataset(LeRobotMixtureDataset):
         new_item = {
             "observation/image": item["video.robot0_agentview_left"][0],
             "observation/wrist_image": item["video.robot0_eye_in_hand"][0],
+            "observation/image_right": item["video.robot0_agentview_right"][0],
             "observation/state": state[0],
             "actions": actions,
             "prompt": item["annotation.human.task_description"][0], # TODO: Soroush change this later to task_description
