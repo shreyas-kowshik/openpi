@@ -1,11 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=robocasa-counter_to_cabinet_exact_replay
+#SBATCH --job-name=robocasa-prepare_coffee_l25_s29_joint_discrete_state
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:A6000:2
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
 #SBATCH --time=2-00:00:00
 #SBATCH --partition=general
+#SBATCH --array=0
+#SBATCH --exclude=babel-p5-24
 #SBATCH --output=/data/user_data/%u/pi05_robocasa_exps/logs/%x_%j.out
 #SBATCH --error=/data/user_data/%u/pi05_robocasa_exps/logs/%x_%j.err
 
@@ -28,7 +30,7 @@ source /data/user_data/skowshik/anaconda3/etc/profile.d/conda.sh
 eval "$(conda shell.bash hook)"
 conda activate openpi
 
-CONFIG_NAME="pi05_robocasa_single_task_lora_counter_to_cabinet_exact_replay"
+CONFIG_NAME="pi05_robocasa_joint_control_prepare_coffee_l25_s29_discrete_state"
 EXP_NAME="${CONFIG_NAME}-v1"
 
 echo "Job ID: ${SLURM_JOB_ID} | Node: ${SLURMD_NODENAME} | Config: ${CONFIG_NAME}"

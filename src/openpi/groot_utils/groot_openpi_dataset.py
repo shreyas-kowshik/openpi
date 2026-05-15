@@ -276,6 +276,43 @@ class GrootOpenpiSingleDataset(LeRobotSingleDataset):
         return new_item
 
 
+class GrootOpenpiJointDataset(GrootOpenpiSingleDataset):
+    """Groot dataset variant for joint-control actions (23D state, 13D actions).
+
+    State: [joint_pos(7), eef_pos_rel(3), eef_rot_rel(4), base_pos(3), base_rot(4), gripper_qpos(2)]
+    Actions: [joint_target(7), gripper(1), base_motion(3), torso(1), control_mode(1)]
+    """
+
+    def __getitem__(self, index: SupportsIndex) -> dict:
+        # Call the grandparent (LeRobotSingleDataset) __getitem__ to get raw modality keys
+        item = LeRobotSingleDataset.__getitem__(self, index)
+
+        state = np.concatenate([
+            item["state.joint_position"],
+            item["state.end_effector_position_relative"],
+            item["state.end_effector_rotation_relative"],
+            item["state.base_position"],
+            item["state.base_rotation"],
+            item["state.gripper_qpos"],
+        ], axis=1)
+        actions = np.concatenate([
+            item["action.joint_position_target"],
+            item["action.gripper_close"],
+            item["action.base_motion"],
+            item["action.torso_delta"],
+            item["action.control_mode"],
+        ], axis=1)
+
+        return {
+            "observation/image": item["video.robot0_agentview_left"][0],
+            "observation/wrist_image": item["video.robot0_eye_in_hand"][0],
+            "observation/image_right": item["video.robot0_agentview_right"][0],
+            "observation/state": state[0],
+            "actions": actions,
+            "prompt": item["annotation.human.task_description"][0],
+        }
+
+
 class GrootOpenpiMultiDataset(LeRobotMixtureDataset):
     def __init__(
             self,

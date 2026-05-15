@@ -128,6 +128,8 @@ class DataConfig:
     data_dirs: list[dict] | None = None
     # Sampling weights for multi-dataset training.
     dataset_weights: list[float] | None = None
+    # If True, use the joint-control Groot dataset loader (GrootOpenpiJointDataset).
+    joint_control: bool = False
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -807,6 +809,72 @@ class LeRobotRobocasaDataConfig(DataConfigFactory):
             data_dirs=enriched_data_dirs,
             dataset_weights=self.dataset_weights,
             norm_stats=base.norm_stats or fallback_norm_stats,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotRobocasaJointDataConfig(LeRobotRobocasaDataConfig):
+    """Config for RoboCasa joint-control training.
+
+    Actions are stored as absolute joint targets in the dataset. At training time,
+    a DeltaActions transform converts actions[0:7] to deltas by subtracting state[0:7].
+    At inference, AbsoluteActions converts predicted deltas back to absolute targets.
+    """
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group()
+
+        data_transforms = _transforms.Group(
+            inputs=[robocasa_policy.RobocasaJointInputs(action_dim=model_config.action_dim, model_type=model_config.model_type)],
+            outputs=[robocasa_policy.RobocasaJointOutputs()],
+        )
+
+        # Apply delta transform: actions[0:7] (arm joints) are absolute targets,
+        # convert to delta by subtracting state[0:7] (current arm joint positions).
+        # Dims 7-12 (gripper, base, torso, control_mode) are already deltas/velocities.
+        delta_action_mask = _transforms.make_bool_mask(7, -1)
+        data_transforms = data_transforms.push(
+            inputs=[_transforms.DeltaActions(delta_action_mask)],
+            outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+        )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        base = self.create_base_config(assets_dirs, model_config)
+
+        # Enrich data_dirs with scene filtering params (same logic as parent)
+        enriched_data_dirs = self.data_dirs
+        filter_fields = {
+            "match_episode_id": self.match_episode_id,
+            "layout_and_style_ids": self.layout_and_style_ids,
+            "num_demos": self.num_demos,
+            "obj_category": self.obj_category,
+            "fixture_refs": self.fixture_refs,
+            "object_categories": self.object_categories,
+            "episode_ids": self.episode_ids,
+        }
+        has_any_filter = any(v is not None for v in filter_fields.values())
+        if self.data_dirs and has_any_filter:
+            enriched_data_dirs = []
+            for d in self.data_dirs:
+                d_copy = dict(d)
+                for key, value in filter_fields.items():
+                    if value is not None:
+                        d_copy[key] = value
+                enriched_data_dirs.append(d_copy)
+
+        fallback_norm_stats = None
+
+        return dataclasses.replace(
+            base,
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            data_dirs=enriched_data_dirs,
+            dataset_weights=self.dataset_weights,
+            norm_stats=base.norm_stats or fallback_norm_stats,
+            joint_control=True,
         )
 
 
@@ -6023,6 +6091,48 @@ _CONFIGS = [
         log_interval=100,
         action_l1_loss_interval=1000,
     ),
+    # PrepareCoffee (composite) — ep 4: layout=25, style=29 — JOINT CONTROL
+    TrainConfig(
+        name="pi05_robocasa_joint_control_prepare_coffee_l25_s29",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            # Must be True for pi0.5 so the 23D joint state is tokenized and
+            # fed to the model. Without it the DeltaActions transform produces
+            # state-dependent deltas but the model never sees the state.
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaJointDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa_joint",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot_joint",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(25, 29)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group", "cab": "cab_4_main_group"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        # External RoboCasa action dim (7 arm + 1 gripper + 3 base + 1 torso + 1 mode).
+        # Pi0Config.action_dim remains 32 for the padded model interface.
+        action_dim=13,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
     # PrepareCoffee (composite) — ep 4: layout=25, style=29 — discrete state
     TrainConfig(
         name="pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l25_s29_discrete_state",
@@ -6054,6 +6164,48 @@ _CONFIGS = [
         ema_decay=None,
         num_train_steps=100_000,
         batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — ep 4: layout=25, style=29 — discrete state — JOINT CONTROL
+    TrainConfig(
+        name="pi05_robocasa_joint_control_prepare_coffee_l25_s29_discrete_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            # Must be True for pi0.5 so the 23D joint state is tokenized and
+            # fed to the model. Without it the DeltaActions transform produces
+            # state-dependent deltas but the model never sees the state.
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaJointDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa_joint",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot_joint",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(25, 29)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group", "cab": "cab_4_main_group"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        # External RoboCasa action dim (7 arm + 1 gripper + 3 base + 1 torso + 1 mode).
+        # Pi0Config.action_dim remains 32 for the padded model interface.
+        action_dim=13,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=32,
         save_interval=4000,
         keep_period=1000,
         num_workers=4,
@@ -6263,6 +6415,48 @@ _CONFIGS = [
                 "filter_key": None,
             }],
             layout_and_style_ids=[(1, 1)],
+            num_demos=1,
+            eval_init_mode="exact_state_replay",
+            eval_pool_episode_ids=[32],
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.1,
+            eval_object_pose_noise=0.1,
+            eval_object_ori_noise=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir="/data/hf_cache/models/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PickPlaceCounterToCabinet (atomic) — ep 32: layout=1, style=1, train+eval on same episode
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_exact_replay_l1_s1_ep32",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": "/data/hf_cache/datasets/robocasa/v1.0/target/atomic/PickPlaceCounterToCabinet/20250811/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(1, 1)],
+            fixture_refs={"cab": "cab_3_main_group", "counter": "counter_right_main_group"},
+            episode_ids=[32],
             num_demos=1,
             eval_init_mode="exact_state_replay",
             eval_pool_episode_ids=[32],

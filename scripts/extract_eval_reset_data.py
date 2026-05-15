@@ -18,6 +18,12 @@ Usage:
         --config-name pi05_robocasa_single_task_lora_turn_on_sink_faucet \
         --output-dir ./eval_reset_data
 
+    To dump the eval_pool_episode_ids instead of the training-filtered episodes:
+    uv run scripts/extract_eval_reset_data.py \
+        --config-name pi05_robocasa_single_task_lora_counter_to_cabinet_exact_replay \
+        --output-dir ./eval_reset_data \
+        --use-eval-episodes
+
 Then evaluate with exact state replay:
     python examples/robocasa/main.py \
         --eval-init-mode exact_state_replay \
@@ -86,11 +92,25 @@ def get_filtered_episode_ids(config: _config.TrainConfig) -> list[tuple[pathlib.
     return results
 
 
-def main(config_name: str, output_dir: str = "./eval_reset_data") -> None:
+def main(config_name: str, output_dir: str = "./eval_reset_data", use_eval_episodes: bool = False) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
     config = _config.get_config(config_name)
-    per_dataset = get_filtered_episode_ids(config)
+
+    if use_eval_episodes:
+        eval_ep_ids = getattr(config.data, "eval_pool_episode_ids", None)
+        if eval_ep_ids is None:
+            raise ValueError(
+                f"--use-eval-episodes was set but config {config_name!r} "
+                f"has no eval_pool_episode_ids"
+            )
+        data_dirs = config.data.data_dirs or []
+        per_dataset = [
+            (pathlib.Path(d["path"]), sorted(eval_ep_ids)) for d in data_dirs
+        ]
+        logging.info(f"Using eval_pool_episode_ids={eval_ep_ids} instead of training filters")
+    else:
+        per_dataset = get_filtered_episode_ids(config)
 
     out_base = pathlib.Path(output_dir) / config_name
     out_extras = out_base / "extras"

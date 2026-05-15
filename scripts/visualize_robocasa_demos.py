@@ -70,6 +70,8 @@ def get_enriched_data_dirs(config: _config.TrainConfig) -> list[dict]:
             d_copy["fixture_refs"] = data_factory.fixture_refs
         if getattr(data_factory, "match_episode_id", None) is not None:
             d_copy["match_episode_id"] = data_factory.match_episode_id
+        if getattr(data_factory, "episode_ids", None) is not None:
+            d_copy["episode_ids"] = data_factory.episode_ids
         enriched.append(d_copy)
     return enriched
 

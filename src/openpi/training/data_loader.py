@@ -706,12 +706,19 @@ def create_torch_dataset(
     # Groot/RoboCasa dataset loading
     if getattr(data_config, "data_dirs", None):
         data_dirs = data_config.data_dirs
+        use_joint = getattr(data_config, "joint_control", False)
         if len(data_dirs) == 1:
-            return _groot_openpi_dataset.GrootOpenpiSingleDataset(
+            dataset_cls = _groot_openpi_dataset.GrootOpenpiJointDataset if use_joint else _groot_openpi_dataset.GrootOpenpiSingleDataset
+            return dataset_cls(
                 dataset_meta=data_dirs[0],
                 action_horizon=action_horizon,
             )
         elif len(data_dirs) > 1:
+            if use_joint:
+                raise NotImplementedError(
+                    "joint_control=True is not supported for multiple data_dirs yet. "
+                    "GrootOpenpiMultiDataset uses EEF state/action layout."
+                )
             return _groot_openpi_dataset.GrootOpenpiMultiDataset(
                 dataset_meta_list=data_dirs,
                 dataset_weights=getattr(data_config, "dataset_weights", None),
