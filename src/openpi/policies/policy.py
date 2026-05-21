@@ -63,9 +63,11 @@ class Policy(BasePolicy):
             # JAX model setup
             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
             self._rng = rng or jax.random.key(0)
+            if hasattr(model, "get_prefix_rep"):
+                self._get_prefix_rep = nnx_utils.module_jit(model.get_prefix_rep)
 
     @override
-    def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+    def infer(self, obs: dict, *, noise: np.ndarray | None = None, return_vlm_embedding: bool = False) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
@@ -103,7 +105,24 @@ class Policy(BasePolicy):
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }
+
+        if return_vlm_embedding:
+            vlm_embedding = self._get_prefix_rep(_model.Observation.from_dict(inputs))
+            outputs["vlm_embedding"] = vlm_embedding
+
         return outputs
+
+    def get_prefix_rep(self, obs: dict):
+        """Returns (hidden_state, kv_cache) from the VLM prefix pass, without generating actions."""
+        inputs = jax.tree.map(lambda x: x, obs)
+        inputs = self._input_transform(inputs)
+        # TokenizePrompt adds a leading (1,) dim for single prompts; remove it before
+        # the [np.newaxis] expansion so tokenized_prompt ends up (1, L) not (1, 1, L).
+        for key in ("tokenized_prompt", "tokenized_prompt_mask"):
+            if key in inputs and hasattr(inputs[key], "ndim") and inputs[key].ndim >= 2:
+                inputs[key] = inputs[key][0]
+        inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
+        return self._get_prefix_rep(_model.Observation.from_dict(inputs))
 
     @property
     def metadata(self) -> dict[str, Any]:
