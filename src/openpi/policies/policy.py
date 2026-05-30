@@ -54,6 +54,9 @@ class Policy(BasePolicy):
         self._metadata = metadata or {}
         self._is_pytorch_model = is_pytorch
         self._pytorch_device = pytorch_device
+        self.action_dim = model.action_dim
+        self.action_horizon = model.action_horizon
+        self._get_prefix_rep = nnx_utils.module_jit(model.get_prefix_rep)
 
         if self._is_pytorch_model:
             self._model = self._model.to(pytorch_device)
@@ -61,20 +64,42 @@ class Policy(BasePolicy):
             self._sample_actions = model.sample_actions
         else:
             # JAX model setup
-            self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+            self._sample_actions = nnx_utils.module_jit(model.sample_actions, static_argnames=("return_vlm_embedding",))
             self._rng = rng or jax.random.key(0)
 
     @override
-    def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+    def infer(
+        self,
+        obs: dict,
+        *,
+        noise: np.ndarray | None = None,
+        return_vlm_embedding: bool = False,
+        return_normalized: bool = False,
+    ) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
         if not self._is_pytorch_model:
-            # Make a batch and convert to jax.Array.
-            inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
             self._rng, sample_rng_or_pytorch_device = jax.random.split(self._rng)
+            # Support batched inputs: if state already has a batch dim, broadcast
+            # non-image/state keys instead of adding a new batch dim.
+            if inputs["state"].ndim > 1:
+                batch_size = inputs["state"].shape[0]
+                def _add_batch_dim(x):
+                    return jnp.broadcast_to(
+                        x[jnp.newaxis, ...],
+                        (batch_size,) + x.shape
+                    )
+                inputs = jax.tree.map(lambda x: jnp.asarray(x), inputs)
+                for key in inputs:
+                    if key not in ["image", "state"]:
+                        inputs[key] = jax.tree.map(lambda x: _add_batch_dim(x), inputs[key])
+            else:
+                batch_size = 1
+                inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
         else:
             # Convert inputs to PyTorch tensors and move to correct device
+            batch_size = 1
             inputs = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...], inputs)
             sample_rng_or_pytorch_device = self._pytorch_device
 
@@ -86,24 +111,57 @@ class Policy(BasePolicy):
             if noise.ndim == 2:  # If noise is (action_horizon, action_dim), add batch dimension
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise
+        if return_vlm_embedding:
+            sample_kwargs["return_vlm_embedding"] = True
 
         observation = _model.Observation.from_dict(inputs)
         start_time = time.monotonic()
+        sample_result = self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs)
+
+        if return_vlm_embedding:
+            actions, vlm_embedding = sample_result
+        else:
+            actions = sample_result
+
         outputs = {
             "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
+            "actions": actions,
         }
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
         else:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+            if batch_size == 1:
+                outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 
-        outputs = self._output_transform(outputs)
+        if not return_normalized:
+            outputs = self._output_transform(outputs)
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }
+        if return_vlm_embedding:
+            outputs["vlm_embedding"] = vlm_embedding
         return outputs
+
+    @override
+    def get_prefix_rep(self, obs: dict):
+        inputs = jax.tree.map(lambda x: x, obs)
+        inputs = self._input_transform(inputs)
+        inputs = jax.tree.map(lambda x: jnp.asarray(x), inputs)
+        # add batch dim and broadcast for keys that are not "image" and "state"
+        if inputs["state"].ndim > 1:
+            batch_size = inputs["state"].shape[0]
+            def _add_batch_dim(x):
+                return jnp.broadcast_to(
+                    x[jnp.newaxis, ...],
+                    (batch_size,) + x.shape
+                )
+            for key in inputs:
+                if key not in ["image", "state"]:
+                    inputs[key] = jax.tree.map(lambda x: _add_batch_dim(x), inputs[key])
+        else:
+            inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
+        return self._get_prefix_rep(_model.Observation.from_dict(inputs))
 
     @property
     def metadata(self) -> dict[str, Any]:

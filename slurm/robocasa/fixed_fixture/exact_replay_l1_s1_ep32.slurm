@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
 #SBATCH --time=2-00:00:00
-#SBATCH --partition=preempt
+#SBATCH --partition=general
 #SBATCH --requeue
 #SBATCH --output=/data/user_data/%u/pi05_robocasa_exps/logs/%x_%j.out
 #SBATCH --error=/data/user_data/%u/pi05_robocasa_exps/logs/%x_%j.err

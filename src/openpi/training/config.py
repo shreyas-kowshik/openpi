@@ -28,6 +28,7 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 import openpi.policies.robocasa_policy as robocasa_policy
+import openpi.policies.yam_policy as _yam_policy
 import openpi.groot_utils.groot_openpi_dataset as _groot_openpi_dataset
 import numpy as np
 
@@ -130,6 +131,16 @@ class DataConfig:
     dataset_weights: list[float] | None = None
     # If True, use the joint-control Groot dataset loader (GrootOpenpiJointDataset).
     joint_control: bool = False
+
+    # Episode-level filters for a single LeRobot dataset (used by the YAM
+    # combined dataset to derive per-task / per-trajectory subsets without
+    # duplicating video data). Filtering happens whole-episode so
+    # delta-timestamps action chunking remains valid.
+    dataset_filter_prompt: str | None = None
+    dataset_filter_orig_traj_id_6_eq: int | None = None
+    dataset_filter_orig_traj_id_6_min: int | None = None
+    dataset_filter_orig_traj_id_6_max: int | None = None
+
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -4424,6 +4435,505 @@ _CONFIGS = [
 
     ###########################
 
+    ####### PARL DATA 50 TRAJECTORIES FINE TUNING #######
+
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_parl50_hdf5_libero10",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/libero10_parl_rollouts50/both_mokapots",
+            hdf5_filenames=["KITCHEN_SCENE8_put_both_moka_pots_on_the_stove_parl_seed0_success50.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_parl50_hdf5_libero10",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/libero10_parl_rollouts50/alpha_soup_tomato",
+            hdf5_filenames=["LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket_parl_seed0_success50.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_parl50_hdf5_libero10_v2",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/libero10_parl_rollouts50_v2/alpha_soup_tomato",
+            hdf5_filenames=["LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket_parl_fixedinit_seed0_success50.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=64,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_parl50_hdf5_libero10",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/libero10_parl_rollouts50/black_bowl_bottom_drawer",
+            hdf5_filenames=["KITCHEN_SCENE4_put_the_black_bowl_in_the_bottom_drawer_of_the_cabinet_and_close_it_parl_seed0_success50.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    ###########################
+
+    ####### EP1 INIT + PARL50 ACTION HEAD ONLY FINE TUNING #######
+
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep1_init_parl50_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/libero10_parl_rollouts50/both_mokapots",
+            hdf5_filenames=["KITCHEN_SCENE8_put_both_moka_pots_on_the_stove_parl_seed0_success50.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_libero10_both_mokapots_stove_ep1_ep86_filtered-v1/16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_head_only(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_init_parl50_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/libero10_parl_rollouts50/alpha_soup_tomato",
+            hdf5_filenames=["LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket_parl_seed0_success50.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_checkpoints_libero10/pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_head_only(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_ep1_init_parl50_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/libero10_parl_rollouts50/black_bowl_bottom_drawer",
+            hdf5_filenames=["KITCHEN_SCENE4_put_the_black_bowl_in_the_bottom_drawer_of_the_cabinet_and_close_it_parl_seed0_success50.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_checkpoints_libero10/pi05_libero10_black_bowl_bottom_drawer_ep1_16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_head_only(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    ####### EP1 INIT + FULL DATA ACTION HEAD ONLY FINE TUNING #######
+
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep1_init_full_data_action_head_only_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["KITCHEN_SCENE8_put_both_moka_pots_on_the_stove_demo.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_libero10_both_mokapots_stove_ep1_ep86_filtered-v1/16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=2000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_head_only(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_init_full_data_action_head_only_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket_demo.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_checkpoints_libero10/pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=2000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_head_only(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_ep1_init_full_data_action_head_only_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["KITCHEN_SCENE4_put_the_black_bowl_in_the_bottom_drawer_of_the_cabinet_and_close_it_demo.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_checkpoints_libero10/pi05_libero10_black_bowl_bottom_drawer_ep1_16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=2000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_head_only(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    ####### EP1 INIT + FULL DATA VISION ONLY FINE TUNING #######
+
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep1_init_full_data_vision_only_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["KITCHEN_SCENE8_put_both_moka_pots_on_the_stove_demo.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_libero10_both_mokapots_stove_ep1_ep86_filtered-v1/16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=2000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_expert_lora_vision(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_init_full_data_vision_only_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket_demo.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_checkpoints_libero10/pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=2000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_expert_lora_vision(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_ep1_init_full_data_vision_only_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/hf_cache/datasets/libero_10",
+            hdf5_filenames=["KITCHEN_SCENE4_put_the_black_bowl_in_the_bottom_drawer_of_the_cabinet_and_close_it_demo.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_checkpoints_libero10/pi05_libero10_black_bowl_bottom_drawer_ep1_16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=2000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_expert_lora_vision(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    ####### EP1 INIT + PARL50 VISION ONLY FINE TUNING #######
+
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep1_init_parl50_vision_only_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/libero10_parl_rollouts50/both_mokapots",
+            hdf5_filenames=["KITCHEN_SCENE8_put_both_moka_pots_on_the_stove_parl_seed0_success50.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_libero10_both_mokapots_stove_ep1_ep86_filtered-v1/16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_expert_lora_vision(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_init_parl50_vision_only_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/libero10_parl_rollouts50/alpha_soup_tomato",
+            hdf5_filenames=["LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket_parl_seed0_success50.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_checkpoints_libero10/pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_expert_lora_vision(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_ep1_init_parl50_vision_only_hdf5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=Libero10HDF5DataConfig(
+            data_dir="/data/group_data/maxlab/common_datasets/skowshik/libero10_parl_rollouts50/black_bowl_bottom_drawer",
+            hdf5_filenames=["KITCHEN_SCENE4_put_the_black_bowl_in_the_bottom_drawer_of_the_cabinet_and_close_it_parl_seed0_success50.hdf5"],
+        ),
+        assets_base_dir="/data/hf_cache/models/pi05_libero10_assets/",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/group_data/maxlab/common_datasets/pi05_common/pi05_checkpoints_libero10/pi05_libero10_black_bowl_bottom_drawer_ep1_16000/params/"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter_action_expert_lora_vision(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    ###########################
+
 
     ##### DEBUG CONFIGS #####
     TrainConfig(
@@ -6479,6 +6989,806 @@ _CONFIGS = [
         log_interval=100,
         action_l1_loss_interval=1000,
     ),
+
+    #
+    # Fine-tuning YAM configs.
+    #
+    TrainConfig(
+        name="pi05_yam_simpletest_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_simpletest",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    _yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="pick up the lego block and place into the box",
+            ),
+            base_config=DataConfig(
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=10_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    #
+    # Per-arm YAM configs. Train a separate policy per arm (7-dim state/action)
+    # with only 2 cameras (top + wrist for the active arm).
+    # Norm stats must be computed independently for each arm config.
+    #
+    TrainConfig(
+        name="pi05_yam_simpletest_left_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_simpletest",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(arm_id="left", cam_id="left"),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1)),
+                    _yam_policy.YamOutputs(arm_id="left"),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="pick up the lego block and place into the box",
+            ),
+            base_config=DataConfig(
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=10_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi05_yam_simpletest_right_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_simpletest",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(arm_id="right", cam_id="right"),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1)),
+                    _yam_policy.YamOutputs(arm_id="right"),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="pick up the lego block and place into the box",
+            ),
+            base_config=DataConfig(
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=10_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    #
+    # YAM combined-dataset configs. All three point at the same LeRobot dataset
+    # (local/yam_combined: pick-place + arrange-corn-knife + wipe-the-tray);
+    # filtered variants narrow it down by per-episode task prompt and the
+    # per-frame `orig_traj_id_6` int64 column (= last 6 digits of the original
+    # episode directory name). Norm stats are computed once on the unfiltered
+    # combined config and reused by the filtered variants via AssetsConfig.
+    #
+    TrainConfig(
+        name="pi05_yam_combined_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    _yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="perform the task",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi05_yam_pickplace_a_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            assets=AssetsConfig(
+                assets_dir="./assets/pi05_yam_combined_lora",
+                asset_id="local/yam_combined",
+            ),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    _yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="put the green block in the right bin and the blue block in the left bin",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt=(
+                    "put the green block in the right bin and the blue block in the left bin"
+                ),
+                dataset_filter_orig_traj_id_6_eq=14512,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi05_yam_pickplace_b_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            assets=AssetsConfig(
+                assets_dir="./assets/pi05_yam_combined_lora",
+                asset_id="local/yam_combined",
+            ),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    _yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="put the green block in the right bin and the blue block in the left bin",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt=(
+                    "put the green block in the right bin and the blue block in the left bin"
+                ),
+                dataset_filter_orig_traj_id_6_min=14512,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi05_yam_arrange_a_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            assets=AssetsConfig(
+                assets_dir="./assets/pi05_yam_combined_lora",
+                asset_id="local/yam_combined",
+            ),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    _yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="place the knife and the donut on the plate",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt="place the knife and the donut on the plate",
+                dataset_filter_orig_traj_id_6_eq=25632,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi05_yam_arrange_all_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            assets=AssetsConfig(
+                assets_dir="./assets/pi05_yam_combined_lora",
+                asset_id="local/yam_combined",
+            ),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    _yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="place the knife and the donut on the plate",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt="place the knife and the donut on the plate",
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi05_yam_wipe_a_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            assets=AssetsConfig(
+                assets_dir="./assets/pi05_yam_combined_lora",
+                asset_id="local/yam_combined",
+            ),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    _yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="Wipe the black tray with the white cloth",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt="Wipe the black tray with the white cloth",
+                dataset_filter_orig_traj_id_6_eq=43505,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi05_yam_wipe_b_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            assets=AssetsConfig(
+                assets_dir="./assets/pi05_yam_combined_lora",
+                asset_id="local/yam_combined",
+            ),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    _yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="Wipe the black tray with the white cloth",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt="Wipe the black tray with the white cloth",
+                dataset_filter_orig_traj_id_6_max=43214,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi05_yam_wipe_all_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            assets=AssetsConfig(
+                assets_dir="./assets/pi05_yam_combined_lora",
+                asset_id="local/yam_combined",
+            ),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    _yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="Wipe the black tray with the white cloth",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt="Wipe the black tray with the white cloth",
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi05_yam_subtask_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_subtask",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    _yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="perform the task",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=10_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):

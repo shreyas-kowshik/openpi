@@ -135,6 +135,27 @@ class Pi0Config(_model.BaseModelConfig):
     def get_freeze_filter_full(self) -> nnx.filterlib.Filter:
         return nnx_utils.PathRegex(".*llm.*")
     
+    def get_freeze_filter_action_head_only(self) -> nnx.filterlib.Filter:
+        """Freeze everything except action expert and action head projection layers.
+
+        Trains:
+        - action_in_proj, action_out_proj
+        - time_mlp_in, time_mlp_out (Pi0.5)
+        - Action expert Gemma module (.*llm.*_1.*)
+
+        Freezes:
+        - SigLIP encoder (.*img.*)
+        - PaliGemma vision transformer (.*llm.* except .*llm.*_1.*)
+        - All LoRA adapters
+        """
+        return nnx.All(
+            nnx.Not(nnx_utils.PathRegex(".*action_in_proj.*")),
+            nnx.Not(nnx_utils.PathRegex(".*action_out_proj.*")),
+            nnx.Not(nnx_utils.PathRegex(".*time_mlp_in.*")),
+            nnx.Not(nnx_utils.PathRegex(".*time_mlp_out.*")),
+            nnx.Not(nnx_utils.PathRegex(".*llm.*_1.*")),
+        )
+
     def get_freeze_filter_action_expert_lora_vision(self) -> nnx.filterlib.Filter:
         """Freeze everything except SigLIP encoder and vision LoRA adapters.
         

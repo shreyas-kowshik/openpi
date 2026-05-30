@@ -392,3 +392,15 @@ sbatch --export=CONFIG=slurm_orchestrator/config_ep3.json slurm_orchestrator/orc
 sbatch --export=CONFIG=slurm_orchestrator/config_ep5.json slurm_orchestrator/orchestrator.slurm
 ```
 
+# Extract Robocasa Demo Information
+```
+python scripts/extract_eval_reset_data.py \
+    --config-name pi05_robocasa_single_task_lora_kettle_boiling \
+    --output-dir ./data_dumps/robocasa
+
+python scripts/extract_eval_reset_data.py \
+    --config-name pi05_robocasa_single_task_lora_wash_lettuce \
+    --output-dir ./data_dumps/robocasa
+
+```
+

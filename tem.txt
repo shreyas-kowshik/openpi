@@ -1,0 +1,12 @@
+job_id: 6517522 | name: interactive | checkpoint: N/A
+job_id: 6515972 | name: openpi-libero10-black_bowl_bottom_drawer | checkpoint: /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_black_bowl_bottom_drawer_ep5
+job_id: 6517323 | name: dsrl-pi0-residual-parl | checkpoint: N/A
+job_id: 6518450 | name: openpi-libero10-stove_mokapot | checkpoint: /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_stove_mokapot_ep5
+job_id: 6518451 | name: openpi-libero10-yellow_white_mug_microwave | checkpoint: /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_yellow_white_mug_microwave_ep5
+job_id: 6518449 | name: openpi-libero10-both_mokapots_stove | checkpoint: /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_both_mokapots_stove_ep5
+job_id: 6518448 | name: openpi-libero10-alphabet_soup_tomato_sauce_basket | checkpoint: /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_alphabet_soup_tomato_sauce_basket_ep5
+job_id: 6517551 | name: openpi-libero10-cream_cheese_butter_basket | checkpoint: /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_cream_cheese_butter_basket_ep5
+job_id: 6517554 | name: openpi-libero10-white_mug_plates | checkpoint: /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_white_mug_plates_ep3
+job_id: 6517549 | name: openpi-libero10-book_caddy | checkpoint: /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_book_caddy_ep3
+job_id: 6517644 | name: openpi-libero10-white_mug_plates | checkpoint: /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_white_mug_plates_ep3
+job_id: 6517546 | name: openpi-libero10-alphabet_soup_cream_cheese_basket | checkpoint: /data/hf_cache/models/pi05_checkpoints_libero10/pi05_libero10_alphabet_soup_cream_cheese_basket_ep5

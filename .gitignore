@@ -4,6 +4,15 @@ checkpoints/
 data/
 wandb/
 
+# Binary / media files
+*.json
+*.pkl
+*.mp4
+*.gz
+*.png
+*.npz
+*.out
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
