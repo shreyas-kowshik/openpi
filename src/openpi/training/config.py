@@ -7726,6 +7726,548 @@ _CONFIGS = [
         save_interval=5_000,
         keep_period=5_000,
     ),
+    #
+    # Per-arm YAM single-demo configs on the combined dataset.
+    # 4 variants per task: left/right arm × 2cam/3cam.
+    # Each filters to exactly 1 demonstration via dataset_filter_orig_traj_id_6_eq.
+    # Norm stats are computed per-config (7-dim state/action after arm slicing).
+    #
+    # ── pick-place, left arm, 2 cameras (top + left_wrist) ──
+    TrainConfig(
+        name="pi05_yam_pickplace_a_left_2cam_lora",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_real_world/",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(arm_id="left", cam_id="left"),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1)),
+                    _yam_policy.YamOutputs(arm_id="left"),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="put the green block in the right bin and the blue block in the left bin",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt=(
+                    "put the green block in the right bin and the blue block in the left bin"
+                ),
+                dataset_filter_orig_traj_id_6_eq=14512,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    # ── pick-place, left arm, 3 cameras (top + left_wrist + right_wrist) ──
+    TrainConfig(
+        name="pi05_yam_pickplace_a_left_3cam_lora",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_real_world/",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(arm_id="left", cam_id=None),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1)),
+                    _yam_policy.YamOutputs(arm_id="left"),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="put the green block in the right bin and the blue block in the left bin",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt=(
+                    "put the green block in the right bin and the blue block in the left bin"
+                ),
+                dataset_filter_orig_traj_id_6_eq=14512,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    # ── pick-place, right arm, 2 cameras (top + right_wrist) ──
+    TrainConfig(
+        name="pi05_yam_pickplace_a_right_2cam_lora",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_real_world/",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(arm_id="right", cam_id="right"),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1)),
+                    _yam_policy.YamOutputs(arm_id="right"),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="put the green block in the right bin and the blue block in the left bin",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt=(
+                    "put the green block in the right bin and the blue block in the left bin"
+                ),
+                dataset_filter_orig_traj_id_6_eq=14512,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    # ── pick-place, right arm, 3 cameras (top + left_wrist + right_wrist) ──
+    TrainConfig(
+        name="pi05_yam_pickplace_a_right_3cam_lora",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_real_world/",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(arm_id="right", cam_id=None),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1)),
+                    _yam_policy.YamOutputs(arm_id="right"),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="put the green block in the right bin and the blue block in the left bin",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt=(
+                    "put the green block in the right bin and the blue block in the left bin"
+                ),
+                dataset_filter_orig_traj_id_6_eq=14512,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    # ── arrange-corn-knife, left arm, 2 cameras (top + left_wrist) ──
+    TrainConfig(
+        name="pi05_yam_arrange_a_left_2cam_lora",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_real_world/",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(arm_id="left", cam_id="left"),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1)),
+                    _yam_policy.YamOutputs(arm_id="left"),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="place the knife and the donut on the plate",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt="place the knife and the donut on the plate",
+                dataset_filter_orig_traj_id_6_eq=25632,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    # ── arrange-corn-knife, left arm, 3 cameras (top + left_wrist + right_wrist) ──
+    TrainConfig(
+        name="pi05_yam_arrange_a_left_3cam_lora",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_real_world/",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(arm_id="left", cam_id=None),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1)),
+                    _yam_policy.YamOutputs(arm_id="left"),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="place the knife and the donut on the plate",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt="place the knife and the donut on the plate",
+                dataset_filter_orig_traj_id_6_eq=25632,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    # ── arrange-corn-knife, right arm, 2 cameras (top + right_wrist) ──
+    TrainConfig(
+        name="pi05_yam_arrange_a_right_2cam_lora",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_real_world/",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(arm_id="right", cam_id="right"),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1)),
+                    _yam_policy.YamOutputs(arm_id="right"),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="place the knife and the donut on the plate",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt="place the knife and the donut on the plate",
+                dataset_filter_orig_traj_id_6_eq=25632,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
+    # ── arrange-corn-knife, right arm, 3 cameras (top + left_wrist + right_wrist) ──
+    TrainConfig(
+        name="pi05_yam_arrange_a_right_3cam_lora",
+        checkpoint_base_dir="/data/hf_cache/models/pi05_real_world/",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    _yam_policy.YamInputs(arm_id="right", cam_id=None),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1)),
+                    _yam_policy.YamOutputs(arm_id="right"),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(
+                default_prompt="place the knife and the donut on the plate",
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                dataset_filter_prompt="place the knife and the donut on the plate",
+                dataset_filter_orig_traj_id_6_eq=25632,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    ),
     TrainConfig(
         name="pi05_yam_subtask_lora",
         model=pi0_config.Pi0Config(

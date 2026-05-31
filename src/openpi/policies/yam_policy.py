@@ -65,13 +65,21 @@ class YamInputs(transforms.DataTransformFn):
 
         images = {}
         image_masks = {}
-        for source in cam_keys:
-            dest = _FULL_CAMERA_MAP[source]
-            if source in in_images:
+        # Always populate all 3 camera keys so the model receives the expected
+        # image dict.  Cameras not selected by cam_id get a zero image and a
+        # False mask so they are effectively ignored during training/inference.
+        for source, dest in _FULL_CAMERA_MAP.items():
+            if source in cam_keys:
+                if source not in in_images:
+                    raise ValueError(f"Expected camera '{source}' not found. Got: {tuple(in_images)}")
                 images[dest] = _parse_image(in_images[source])
                 image_masks[dest] = np.True_
             else:
-                raise ValueError(f"Expected camera '{source}' not found. Got: {tuple(in_images)}")
+                # Determine spatial dims from any available image.
+                ref = next(iter(in_images.values()))
+                ref_parsed = _parse_image(ref)
+                images[dest] = np.zeros_like(ref_parsed)
+                image_masks[dest] = np.False_
 
         # Slice state/actions for single-arm training.
         arm_slice = _ARM_SLICES.get(self.arm_id) if self.arm_id else None
