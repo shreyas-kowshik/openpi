@@ -5,6 +5,7 @@ from collections.abc import Sequence
 import dataclasses
 import difflib
 import logging
+import os
 import pathlib
 from typing import Any, Literal, Protocol, TypeAlias
 
@@ -23,6 +24,7 @@ import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
+import openpi.policies.robocasa_policy as robocasa_policy
 import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
@@ -31,6 +33,17 @@ import openpi.transforms as _transforms
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
 Filter: TypeAlias = nnx.filterlib.Filter
+
+# Local storage roots used by the configs below. Override these environment variables to point
+# to wherever you store datasets, fine-tuned checkpoints, and assets (e.g., norm stats) on your machine:
+#   OPENPI_DATASET_ROOT     -- root directory for datasets (e.g., RoboCasa LeRobot dumps, DROID RLDS).
+#   OPENPI_CHECKPOINT_ROOT  -- root directory for training outputs / fine-tuned checkpoints.
+#   OPENPI_ASSETS_ROOT      -- root directory for assets such as normalization stats.
+# Publicly released pre-trained models are referenced directly via gs://openpi-assets and are
+# downloaded automatically (see openpi.shared.download, cache location controlled by OPENPI_DATA_HOME).
+DATA_ROOT = os.environ.get("OPENPI_DATASET_ROOT", "./data")
+CHECKPOINT_ROOT = os.environ.get("OPENPI_CHECKPOINT_ROOT", "./checkpoints")
+ASSETS_ROOT = os.environ.get("OPENPI_ASSETS_ROOT", "./assets")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -89,12 +102,37 @@ class DataConfig:
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
 
+    # Groot/RoboCasa dataset directories (list of dicts with 'path' and 'filter_key' keys).
+    data_dirs: list[dict] | None = None
+    # Sampling weights for multi-dataset training.
+    dataset_weights: list[float] | None = None
+    # Whether the config uses joint position control (23D state, 13D actions).
+    joint_control: bool = False
+
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
     # Action space for DROID dataset.
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # Path to the data filter file for DROID dataset
     filter_dict_path: str | None = None
+    # Prompt to filter dataset
+    filter_prompt: str | None = None
+    # Number of episodes to keep after filtering. -1 means keep all, positive value limits episodes.
+    num_episodes: int = -1
+    # If True, exclude samples matching filter_prompt instead of including them
+    exclude_filter_prompt: bool = False
+    # Path to an HDF5 file for direct loading (bypasses LeRobot dataset). Used by LiberoProHDF5DataConfig.
+    hdf5_path: str | None = None
+    # Number of HDF5 episodes to load. -1 means load all. Independent from num_episodes which
+    # controls LeRobot episode filtering.
+    hdf5_num_episodes: int = -1
+
+    # Specific episode IDs to load. If empty (default), all episodes are loaded using the
+    # existing dataloading mechanism. If non-empty, only samples from these episode IDs are used.
+    episode_ids: Sequence[int] = ()
+
+    # Task description for HDF5-only datasets (e.g. robomimic) that don't have embedded language annotations.
+    task_description: str = ""
 
 
 class GroupFactory(Protocol):
@@ -454,11 +492,232 @@ class LeRobotDROIDDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class CustomLiberoDataConfig(DataConfigFactory):
+    """
+    This config is used to configure transforms that are applied at various parts of the data pipeline.
+    For your own dataset, you can copy this class and modify the transforms to match your dataset based on the
+    comments below.
+    """
+
+    extra_delta_transform: bool = False
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # The repack transform is *only* applied to the data coming from the dataset,
+        # and *not* during inference. We can use it to make inputs from the dataset look
+        # as close as possible to those coming from the inference environment (e.g. match the keys).
+        # Below, we match the keys in the dataset (which we defined in the data conversion script) to
+        # the keys we use in our inference pipeline (defined in the inference script for libero).
+        # For your own dataset, first figure out what keys your environment passes to the policy server
+        # and then modify the mappings below so your dataset's keys get matched to those target keys.
+        # The repack transform simply remaps key names here.
+        # repack_transform = _transforms.Group(
+        #     inputs=[
+        #         _transforms.RepackTransform(
+        #             {
+        #                 "observation/image": "image",
+        #                 "observation/wrist_image": "wrist_image",
+        #                 "observation/state": "state",
+        #                 "actions": "actions",
+        #                 "prompt": "prompt",
+        #             }
+        #         )
+        #     ]
+        # )
+
+        # The data transforms are applied to the data coming from the dataset *and* during inference.
+        # Below, we define the transforms for data going into the model (``inputs``) and the transforms
+        # for data coming out of the model (``outputs``) (the latter is only used during inference).
+        # We defined these transforms in `libero_policy.py`. You can check the detailed comments there for
+        # how to modify the transforms to match your dataset. Once you created your own transforms, you can
+        # replace the transforms below with your own.
+        data_transforms = _transforms.Group(
+            inputs=[libero_policy.LiberoInputs(model_type=model_config.model_type)],
+            outputs=[libero_policy.LiberoOutputs()],
+        )
+
+        # One additional data transform: pi0 models are trained on delta actions (relative to the first
+        # state in each action chunk). IF your data has ``absolute`` actions (e.g. target joint angles)
+        # you can uncomment the following line to convert the actions to delta actions. The only exception
+        # is for the gripper actions which are always absolute.
+        # In the example below, we would apply the delta conversion to the first 6 actions (joints) and
+        # leave the 7th action (gripper) unchanged, i.e. absolute.
+        # In Libero, the raw actions in the dataset are already delta actions, so we *do not* need to
+        # apply a separate delta conversion (that's why it's commented out). Choose whether to apply this
+        # transform based on whether your dataset uses ``absolute`` or ``delta`` actions out of the box.
+
+        # LIBERO already represents actions as deltas, but we have some old Pi0 checkpoints that are trained with this
+        # extra delta transform.
+        if self.extra_delta_transform:
+            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        # Model transforms include things like tokenizing the prompt and action targets
+        # You do not need to change anything here for your own dataset.
+        model_transforms = ModelTransformFactory()(model_config)
+
+        # We return all data transforms for training and inference. No need to change anything here.
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            # repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotRobocasaDataConfig(DataConfigFactory):
+    """Config for training on Groot/RoboCasa datasets."""
+
+    repo_id: str | None = None
+
+    data_dirs: Any | None = None
+    dataset_weights: list[float] | None = None
+
+    action_dim: int | None = None
+
+    layout_and_style_ids: list[tuple[int, int]] | None = None
+    num_demos: int | None = None
+    obj_category: str | None = None
+    fixture_refs: dict[str, str] | None = None
+    match_episode_id: int | None = None
+
+    object_categories: list[str] | None = None
+    episode_ids: list[int] | None = None
+
+    eval_dataset_path: str | None = None
+    eval_init_mode: str | None = None
+    eval_pool_fixture_refs: dict[str, str] | None = None
+    eval_pool_episode_ids: list[int] | None = None
+    eval_pool_object_categories: list[str] | None = None
+    eval_keep_robot_pose: bool = False
+    eval_robot_pose_noise: float = 0.0
+    eval_object_pose_noise: float = 0.0
+    eval_object_ori_noise: float = 0.0
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group()
+
+        data_transforms = _transforms.Group(
+            inputs=[robocasa_policy.RobocasaInputs(action_dim=model_config.action_dim, model_type=model_config.model_type)],
+            outputs=[robocasa_policy.RobocasaOutputs()],
+        )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        base = self.create_base_config(assets_dirs, model_config)
+
+        enriched_data_dirs = self.data_dirs
+        filter_fields = {
+            "match_episode_id": self.match_episode_id,
+            "layout_and_style_ids": self.layout_and_style_ids,
+            "num_demos": self.num_demos,
+            "obj_category": self.obj_category,
+            "fixture_refs": self.fixture_refs,
+            "object_categories": self.object_categories,
+            "episode_ids": self.episode_ids,
+        }
+        has_any_filter = any(v is not None for v in filter_fields.values())
+        if self.data_dirs and has_any_filter:
+            enriched_data_dirs = []
+            for d in self.data_dirs:
+                d_copy = dict(d)
+                for key, value in filter_fields.items():
+                    if value is not None:
+                        d_copy[key] = value
+                enriched_data_dirs.append(d_copy)
+
+        fallback_norm_stats = None
+
+        return dataclasses.replace(
+            base,
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            data_dirs=enriched_data_dirs,
+            dataset_weights=self.dataset_weights,
+            norm_stats=base.norm_stats or fallback_norm_stats,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotRobocasaJointDataConfig(LeRobotRobocasaDataConfig):
+    """Config for RoboCasa joint-control training.
+
+    Actions are stored as absolute joint targets in the dataset. At training time,
+    a DeltaActions transform converts actions[0:7] to deltas by subtracting state[0:7].
+    At inference, AbsoluteActions converts predicted deltas back to absolute targets.
+    """
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group()
+
+        data_transforms = _transforms.Group(
+            inputs=[robocasa_policy.RobocasaJointInputs(action_dim=model_config.action_dim, model_type=model_config.model_type)],
+            outputs=[robocasa_policy.RobocasaJointOutputs()],
+        )
+
+        # Apply delta transform: actions[0:7] (arm joints) are absolute targets,
+        # convert to delta by subtracting state[0:7] (current arm joint positions).
+        # Dims 7-12 (gripper, base, torso, control_mode) are already deltas/velocities.
+        delta_action_mask = _transforms.make_bool_mask(7, -1)
+        data_transforms = data_transforms.push(
+            inputs=[_transforms.DeltaActions(delta_action_mask)],
+            outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+        )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        base = self.create_base_config(assets_dirs, model_config)
+
+        # Enrich data_dirs with scene filtering params (same logic as parent)
+        enriched_data_dirs = self.data_dirs
+        filter_fields = {
+            "match_episode_id": self.match_episode_id,
+            "layout_and_style_ids": self.layout_and_style_ids,
+            "num_demos": self.num_demos,
+            "obj_category": self.obj_category,
+            "fixture_refs": self.fixture_refs,
+            "object_categories": self.object_categories,
+            "episode_ids": self.episode_ids,
+        }
+        has_any_filter = any(v is not None for v in filter_fields.values())
+        if self.data_dirs and has_any_filter:
+            enriched_data_dirs = []
+            for d in self.data_dirs:
+                d_copy = dict(d)
+                for key, value in filter_fields.items():
+                    if value is not None:
+                        d_copy[key] = value
+                enriched_data_dirs.append(d_copy)
+
+        fallback_norm_stats = None
+
+        return dataclasses.replace(
+            base,
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            data_dirs=enriched_data_dirs,
+            dataset_weights=self.dataset_weights,
+            norm_stats=base.norm_stats or fallback_norm_stats,
+            joint_control=True,
+        )
+
+
+@dataclasses.dataclass(frozen=False)
 class TrainConfig:
     # Name of the config. Must be unique. Will be used to reference this config.
     name: tyro.conf.Suppress[str]
     # Project name.
     project_name: str = "openpi"
+    # WandB entity (username or team name). Defaults to None (uses wandb's default entity).
+    wandb_entity: str | None = None
     # Experiment name. Will be used to name the metadata and checkpoint directories.
     exp_name: str = tyro.MISSING
 
@@ -487,9 +746,9 @@ class TrainConfig:
     data: DataConfigFactory = dataclasses.field(default_factory=FakeDataConfig)
 
     # Base directory for config assets (e.g., norm stats).
-    assets_base_dir: str = "./assets"
+    assets_base_dir: str = ASSETS_ROOT
     # Base directory for checkpoints.
-    checkpoint_base_dir: str = "./checkpoints"
+    checkpoint_base_dir: str = CHECKPOINT_ROOT
 
     # Random seed that will be used by random generators during training.
     seed: int = 42
@@ -500,6 +759,8 @@ class TrainConfig:
     num_workers: int = 2
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
+    # Action dimension
+    action_dim: int = 32
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
@@ -507,6 +768,9 @@ class TrainConfig:
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
     keep_period: int | None = 5000
+
+    # Action L1 loss interval
+    action_l1_loss_interval: int = 1000
 
     # If true, will overwrite the checkpoint directory if it already exists.
     overwrite: bool = False
@@ -524,6 +788,12 @@ class TrainConfig:
     # eg. if total device is 4 and fsdp devices is 2; then the model will shard to 2 devices and run
     # data parallel between 2 groups of devices.
     fsdp_devices: int = 1
+
+    # Gradient accumulation steps, can be int or None
+    gradient_accumulation_steps: int | None = None
+
+    # When True, compute_norm_stats.py will enforce a minimum q99-q01 range per dimension.
+    enforce_min_quantile_range: bool = False
 
     @property
     def assets_dirs(self) -> pathlib.Path:
@@ -651,6 +921,12 @@ _CONFIGS = [
         # Also modify the DataConfig to use the new config you made for your dataset above.
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="gs://openpi-assets/checkpoints/pi0_libero/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
             base_config=DataConfig(
                 # This flag determines whether we load the prompt (i.e. the task instruction) from the
                 # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
@@ -661,11 +937,41 @@ _CONFIGS = [
         ),
         # Here you define which pre-trained checkpoint you want to load to initialize the model.
         # This should match the model config you chose above -- i.e. in this case we use the pi0 base model.
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
         # Check the base TrainConfig class for a full list of available hyperparameters.
         num_train_steps=30_000,
     ),
+    # TrainConfig(
+    #     # Change the name to reflect your model and dataset.
+    #     name="pi0_libero_all_freeze",
+    #     # Here you define the model config -- In this example we use pi0 as the model
+    #     # architecture and perform *full* finetuning. in the examples below we show how to modify
+    #     # this to perform *low-memory* (LORA) finetuning and use pi0-FAST as an alternative architecture.
+    #     model=pi0_config.Pi0Config(),
+    #     # Here you define the dataset you are training on. In this example we use the Libero
+    #     # dataset. For your own dataset, you can change the repo_id to point to your dataset.
+    #     # Also modify the DataConfig to use the new config you made for your dataset above.
+    #     data=LeRobotLiberoDataConfig(
+    #         repo_id="physical-intelligence/libero",
+    #         base_config=DataConfig(
+    #             # This flag determines whether we load the prompt (i.e. the task instruction) from the
+    #             # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
+    #             # a field called ``prompt`` in the input dict. The recommended setting is True.
+    #             prompt_from_task=True,
+    #         ),
+    #         extra_delta_transform=True,
+    #     ),
+    #     # Here you define which pre-trained checkpoint you want to load to initialize the model.
+    #     # This should match the model config you chose above -- i.e. in this case we use the pi0 base model.
+    #     checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+    #     weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+    #     # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
+    #     # Check the base TrainConfig class for a full list of available hyperparameters.
+    #     num_train_steps=30_000,
+    #     freeze_filter=pi0_config.Pi0Config().get_freeze_filter_full(),
+    # ),
     TrainConfig(
         name="pi0_libero_low_mem_finetune",
         # Here is an example of loading a pi0 model for LoRA fine-tuning.
@@ -730,6 +1036,16 @@ _CONFIGS = [
         ).get_freeze_filter(),
         # Turn off EMA for LoRA finetuning.
         ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi05_base_config",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
     ),
     TrainConfig(
         name="pi05_libero",
@@ -862,7 +1178,7 @@ _CONFIGS = [
         data=RLDSDroidDataConfig(
             repo_id="droid",
             # Set this to the path to your DROID RLDS dataset (the parent directory of the `droid` directory).
-            rlds_data_dir="/mnt/pi-data/kevin",
+            rlds_data_dir=DATA_ROOT,
             action_space=droid_rlds_dataset.DroidActionSpace.JOINT_POSITION,
             assets=AssetsConfig(
                 assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets/",
@@ -960,6 +1276,3034 @@ _CONFIGS = [
     # RoboArena configs.
     #
     *roboarena_config.get_roboarena_configs(),
+    TrainConfig(
+        name="pi05_libero_custom",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=False),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+    ),
+    TrainConfig(
+        name="pi0_fast_libero_low_mem_finetune_custom",
+        # Here is an example of loading a pi0-FAST model for LoRA finetuning.
+        # For setting action_dim, action_horizon, and max_token_len, see the comments above.
+        model=pi0_fast.Pi0FASTConfig(
+            action_dim=7, action_horizon=10, max_token_len=180, paligemma_variant="gemma_2b_lora"
+        ),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=False),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_fast_base/params"),
+        num_train_steps=30_000,
+        # Again, make sure to match the model config above when extracting the freeze filter
+        # that specifies which parameters should be frozen during LoRA finetuning.
+        freeze_filter=pi0_fast.Pi0FASTConfig(
+            action_dim=7, action_horizon=1, max_token_len=180, paligemma_variant="gemma_2b_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi0_libero_low_mem_finetune_custom",
+        # Here is an example of loading a pi0 model for LoRA fine-tuning.
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=False),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=30_000,
+        # The freeze filter defines which parameters should be frozen during training.
+        # We have a convenience function in the model config that returns the default freeze filter
+        # for the given model config for LoRA finetuning. Just make sure it matches the model config
+        # you chose above.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir=f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/500/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/500/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            pi05=True,
+            action_horizon=10, discrete_state_input=False,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_gradacc2_2k",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir=f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/2000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep29_bs64_v1_gradacc_2-v1/2000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            pi05=True,
+            action_horizon=10, discrete_state_input=False,
+        ).get_freeze_filter(),
+    ),
+    # TrainConfig(
+    #     name="pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v1_icml",
+    #     model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora", pi05=True,
+    #                                 action_horizon=10, discrete_state_input=True),
+    #     data=LeRobotLiberoDataConfig(
+    #         repo_id="physical-intelligence/libero",
+    #         base_config=DataConfig(
+    #             prompt_from_task=True,
+    #             filter_prompt="put both moka pots on the stove",
+    #             num_episodes=5,
+    #         ),
+    #         extra_delta_transform=False,
+    #     ),
+    #     # Specify custom paths #
+    #     # Base directory for config assets (e.g., norm stats).
+    #     assets_base_dir=f"{CHECKPOINT_ROOT}/libero_custom_lora_ft/assets",
+    #     # Base directory for checkpoints.
+    #     checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+    #     weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    #     num_train_steps=100_000,
+    #     # L1 loss logging interval
+    #     # By default, we don't log L1 loss
+    #     # Keep a little large as for a diffusion policy this will run denoising
+    #     action_l1_loss_interval=200,
+    #     save_interval=250,
+    #     keep_period=250, # Keep all checkpoints if matches `save_interval`
+    #     # Log action dimension explicitly
+    #     action_dim=7, # 7 for libero
+    #     lr_schedule=_optimizer.CosineDecaySchedule(
+    #         warmup_steps=50,
+    #         peak_lr=2.5e-5,
+    #         decay_steps=100_000,
+    #         decay_lr=2.5e-6,
+    #     ),
+    #     batch_size=128,
+    #     # gradient_accumulation_steps=2,
+    #     log_interval=50,
+    #     # The freeze filter defines which parameters should be frozen during training.
+    #     # We have a convenience function in the model config that returns the default freeze filter
+    #     # for the given model config for LoRA finetuning. Just make sure it matches the model config
+    #     # you chose above.
+    #     freeze_filter=pi0_config.Pi0Config(
+    #         paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora", pi05=True
+    #     ).get_freeze_filter(),
+    #     # Turn off EMA for LoRA finetuning.
+    #     # ema_decay=None,
+    #     num_workers=0,
+    #     # wandb_enabled=False,
+    # ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir=f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-vision_lora_trained_init/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-vision_lora_trained_init-v1/4000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-vision_lora_trained_init/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-vision_lora_trained_init-v1/4000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_v2",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir=f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/6000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_lora_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/6000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_v3",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir=f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_discrete_state_input_False_4k",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir=f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_discrete_state_input_False_4k_yellow_white_mug",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir=f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml-v1/4000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml-v1/4000/params/"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_discrete_state_input_False_8k_yellow_white_mug",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir=f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml-v1/8000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_yellowwhitemug_task_ep5_bs32_v2_icml-v1/8000/params/"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_discrete_state_input_False_4k_vision_init_fullft_action",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir=f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml_init_vision_full_data_trained/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml_init_vision_full_data_trained-v1/1000/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml_init_vision_full_data_trained/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml_init_vision_full_data_trained-v1/1000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_libero_custom_low_mem_ep5_discrete_state_input_False_4k_dsrl",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m"),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir=f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/assets/physical-intelligence/",
+                asset_id="physical-intelligence/libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=300,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(f"{CHECKPOINT_ROOT}/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml/pi05_libero_lora_vision_fullft_action_putbothmokapots_task_ep5_bs32_v2_icml-v1/4000/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+        ).get_freeze_filter(),
+    ),
+    ### Pi0 Libero Base All Freeze ###
+    TrainConfig(
+        name="pi0_libero_all_freeze",
+        model=pi0_config.Pi0Config(),
+        data=CustomLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="gs://openpi-assets/checkpoints/pi0_libero/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        # batch_size=256,
+        # lr_schedule=_optimizer.CosineDecaySchedule(
+        #     warmup_steps=300,
+        #     peak_lr=5e-5,
+        #     decay_steps=30_000,
+        #     decay_lr=5e-5,
+        # ),
+        # optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        # ema_decay=None,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_libero/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_libero/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config().get_freeze_filter_full(),
+    ),
+    TrainConfig(
+        # Change the name to reflect your model and dataset.
+        name="pi0_libero_debug",
+        # Here you define the model config -- In this example we use pi0 as the model
+        # architecture and perform *full* finetuning. in the examples below we show how to modify
+        # this to perform *low-memory* (LORA) finetuning and use pi0-FAST as an alternative architecture.
+        model=pi0_config.Pi0Config(),
+        # Here you define the dataset you are training on. In this example we use the Libero
+        # dataset. For your own dataset, you can change the repo_id to point to your dataset.
+        # Also modify the DataConfig to use the new config you made for your dataset above.
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/",
+                # For custom one task case for now #
+                assets_dir="gs://openpi-assets/checkpoints/pi0_libero/assets/physical-intelligence/",
+                asset_id="libero",
+            ),
+            base_config=DataConfig(
+                # This flag determines whether we load the prompt (i.e. the task instruction) from the
+                # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
+                # a field called ``prompt`` in the input dict. The recommended setting is True.
+                prompt_from_task=True,
+            ),
+            extra_delta_transform=True,
+        ),
+        # Here you define which pre-trained checkpoint you want to load to initialize the model.
+        # This should match the model config you chose above -- i.e. in this case we use the pi0 base model.
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
+        # Check the base TrainConfig class for a full list of available hyperparameters.
+        num_train_steps=30_000,
+        freeze_filter=pi0_config.Pi0Config().get_freeze_filter_full()
+    ),
+
+
+    ###### CLEAN FULL SCALE LIBERO10 EXPERIMENTS ############
+
+    ##### 5 Demos Setting #####
+
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the tomato sauce in the basket",
+                num_episodes=5,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_cream_cheese_butter_basket_ep5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the cream cheese box and the butter in the basket",
+                num_episodes=5,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_stove_mokapot_ep5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="turn on the stove and put the moka pot on it",
+                num_episodes=5,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_ep5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the black bowl in the bottom drawer of the cabinet and close it",
+                num_episodes=5,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_plates_ep5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the left plate and put the yellow and white mug on the right plate",
+                num_episodes=5,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_book_caddy_ep5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="pick up the book and place it in the back compartment of the caddy",
+                num_episodes=5,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_chocolate_pudding_ep5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the plate and put the chocolate pudding to the right of the plate",
+                num_episodes=5,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_cream_cheese_basket_ep5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the cream cheese box in the basket",
+                num_episodes=5,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                num_episodes=5,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_yellow_white_mug_microwave_ep5",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the yellow and white mug in the microwave and close it",
+                num_episodes=5,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    ###########################
+
+    ##### 1 Demo Setting #####
+
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the tomato sauce in the basket",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    # Debug Config #
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_no_lora",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the tomato sauce in the basket",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep1_no_lora",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_stove_mokapot_ep1_no_lora",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="turn on the stove and put the moka pot on it",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_chocolate_pudding_ep1_no_lora",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the plate and put the chocolate pudding to the right of the plate",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_plates_ep1_no_lora",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the left plate and put the yellow and white mug on the right plate",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_ep1_no_lora",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the black bowl in the bottom drawer of the cabinet and close it",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    ######################################
+
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_clear_clutter",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the tomato sauce in the basket",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_cream_cheese_butter_basket_ep1",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the cream cheese box and the butter in the basket",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_stove_mokapot_ep1",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="turn on the stove and put the moka pot on it",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_ep1",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the black bowl in the bottom drawer of the cabinet and close it",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_plates_ep1",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the left plate and put the yellow and white mug on the right plate",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_book_caddy_ep1",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="pick up the book and place it in the back compartment of the caddy",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_chocolate_pudding_ep1",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the plate and put the chocolate pudding to the right of the plate",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_cream_cheese_basket_ep1",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the cream cheese box in the basket",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep1",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    ###########################
+    ##### pi05_base variants (frozen generalist base policy for DSRL) #####
+    # These load the generic pi05_base checkpoint (full gemma_2b, non-LoRA) instead of the
+    # task-finetuned LoRA checkpoints. Intended for use as the frozen base policy in DSRL
+    # residual training, with T_CKPT pointed at the local pi05_base directory. The model config
+    # mirrors `pi05_base_config` so it matches the pi05_base params; per-task libero norm stats
+    # are referenced via `asset_id` (copied into pi05_base/assets/<asset_id>/norm_stats.json).
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep1_pi05_base",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(asset_id="libero_alphabet_soup_tomato_sauce_basket_ep1"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the tomato sauce in the basket",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_ep1_pi05_base",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(asset_id="libero_black_bowl_bottom_drawer_ep1"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the black bowl in the bottom drawer of the cabinet and close it",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+    ),
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep1_pi05_base",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(asset_id="libero_both_mokapots_stove_ep1"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+    ),
+    ###########################
+    TrainConfig(
+        name="pi05_libero10_yellow_white_mug_microwave_ep1",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the yellow and white mug in the microwave and close it",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    ###########################
+
+    ##### 3 Demos Setting #####
+
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_ep3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the tomato sauce in the basket",
+                num_episodes=3,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_cream_cheese_butter_basket_ep3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the cream cheese box and the butter in the basket",
+                num_episodes=3,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_stove_mokapot_ep3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="turn on the stove and put the moka pot on it",
+                num_episodes=3,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_ep3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the black bowl in the bottom drawer of the cabinet and close it",
+                num_episodes=3,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_plates_ep3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the left plate and put the yellow and white mug on the right plate",
+                num_episodes=3,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_book_caddy_ep3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="pick up the book and place it in the back compartment of the caddy",
+                num_episodes=3,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_chocolate_pudding_ep3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the plate and put the chocolate pudding to the right of the plate",
+                num_episodes=3,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_cream_cheese_basket_ep3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the cream cheese box in the basket",
+                num_episodes=3,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                num_episodes=3,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_yellow_white_mug_microwave_ep3",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the yellow and white mug in the microwave and close it",
+                num_episodes=3,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    ###########################
+
+
+    ##### DEBUG CONFIGS #####
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep20",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                num_episodes=20,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_chocolate_pudding_ep20",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the plate and put the chocolate pudding to the right of the plate",
+                num_episodes=20,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+
+    #########################################################
+
+    #
+    # Episode ID filtering demo configs.
+    #
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_episode_ids_demo",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                episode_ids=[86],
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep1_ep86_filtered",        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                episode_ids=[86],
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=64,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep3_filtered",        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                episode_ids=[10, 20, 86],
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_ep5_filtered",        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                episode_ids=[10, 20, 23, 46, 86],
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_chocolate_pudding_ep1_ep11_filtered",        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the plate and put the chocolate pudding to the right of the plate",
+                episode_ids=[11],
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=64,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_chocolate_pudding_ep3_filtered",        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the plate and put the chocolate pudding to the right of the plate",
+                episode_ids=[1, 4, 11],
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_white_mug_chocolate_pudding_ep5_filtered",        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the white mug on the plate and put the chocolate pudding to the right of the plate",
+                episode_ids=[1, 4, 5, 11, 19],
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    # =========================================================================
+    # RoboCasa single-task LoRA configs
+    # =========================================================================
+    # TurnOnSinkFaucet — layout=21, style=49
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_turn_on_sink_faucet",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/atomic/TurnOnSinkFaucet/20250819/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(21, 49)],
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # SlideDishwasherRack — layout=51, style=44
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_slide_dishwasher_rack",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/atomic/SlideDishwasherRack/20250820/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(51, 44)],
+            fixture_refs={"dishwasher": "dishwasher_1_main_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PickPlaceCounterToCabinet — layout=28, style=14
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_pick_place_counter_to_cabinet",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/atomic/PickPlaceCounterToCabinet/20250819/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(28, 14)],
+            fixture_refs={"cab": "cab_1_main_group", "counter": "counter_1_main_group"},
+            num_demos=1,
+            eval_dataset_path=f"{DATA_ROOT}/data_dumps/robocasa/pi05_robocasa_single_task_lora_pick_place_counter_to_cabinet",
+            eval_init_mode="exact_state_replay",
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.025,
+            eval_object_pose_noise=0.1,
+            eval_object_ori_noise=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PickPlaceCounterToCabinet (atomic) — layout=1, style=1, exact_state_replay eval
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_counter_to_cabinet_exact_replay",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/target/atomic/PickPlaceCounterToCabinet/20250811/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(1, 1)],
+            num_demos=1,
+            eval_init_mode="exact_state_replay",
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.1,
+            eval_object_pose_noise=0.1,
+            eval_object_ori_noise=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PickPlaceCounterToCabinet (atomic) — ep 32: layout=1, style=1, train+eval on same episode
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_exact_replay_l1_s1_ep32",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/target/atomic/PickPlaceCounterToCabinet/20250811/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(1, 1)],
+            fixture_refs={"cab": "cab_3_main_group", "counter": "counter_right_main_group"},
+            episode_ids=[32],
+            num_demos=1,
+            eval_init_mode="exact_state_replay",
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.1,
+            eval_object_pose_noise=0.1,
+            eval_object_ori_noise=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    TrainConfig(
+        name="pi05_libero10_both_mokapots_stove_full_data",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                num_episodes=-1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_alphabet_soup_tomato_sauce_basket_full_data",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both the alphabet soup and the tomato sauce in the basket",
+                num_episodes=-1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    TrainConfig(
+        name="pi05_libero10_black_bowl_bottom_drawer_full_data",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True,
+                                    action_horizon=10, discrete_state_input=False),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put the black bowl in the bottom drawer of the cabinet and close it",
+                num_episodes=-1,
+            ),
+            extra_delta_transform=False,
+        ),
+        assets_base_dir=f"{ASSETS_ROOT}/pi05_libero10_assets/",
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_checkpoints_libero10/",
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50_000,
+        action_l1_loss_interval=500,
+        save_interval=4000,
+        keep_period=1000,
+        action_dim=7,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=2.5e-5,
+            decay_steps=100_000,
+            decay_lr=2.5e-6,
+        ),
+        batch_size=32,
+        log_interval=50,
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m", pi05=True
+        ).get_freeze_filter(),
+        num_workers=0,
+        enforce_min_quantile_range=True,
+    ),
+    # KettleBoiling (composite, horizon=1000) — ep 0: layout=37, style=37
+    # Pick kettle from counter → place on stove burner → turn burner on
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_kettle_boiling",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/KettleBoiling/20250725/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(37, 37)],
+            fixture_refs={"stove": "stovetop_left_group_1", "counter": "counter_1_left_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # KettleBoiling action_dim=12 (composite, horizon=1000) — ep 0: layout=37, style=37
+    # Pick kettle from counter → place on stove burner → turn burner on
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_kettle_boiling_action_dim12",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/KettleBoiling/20250725/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(37, 37)],
+            fixture_refs={"stove": "stovetop_left_group_1", "counter": "counter_1_left_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # WashLettuce (composite, horizon=1100) — ep 0: layout=38, style=47
+    # Wash lettuce in the sink by running water over it
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_wash_lettuce",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/WashLettuce/20250723/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(38, 47)],
+            fixture_refs={"sink": "sink_main_group_1", "counter": "counter_1_main_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # WashLettuce with all 3 camera views (agentview_left, agentview_right, eye_in_hand)
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_wash_lettuce_action_dim12_rightview_added",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/WashLettuce/20250723/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(38, 47)],
+            fixture_refs={"sink": "sink_main_group_1", "counter": "counter_1_main_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # LoadDishwasher — load dishes into the dishwasher; layout=59, style=36
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_load_dishwasher_action_dim12",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/LoadDishwasher/20250717/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(59, 36)],
+            fixture_refs={"dishwasher": "dishwasher_1_island_group_1", "counter": "island_island_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # WashLettuce with all 3 camera views + discrete_state_input
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_wash_lettuce_action_dim12_rightview_added_discrete_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/WashLettuce/20250723/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(38, 47)],
+            fixture_refs={"sink": "sink_main_group_1", "counter": "counter_1_main_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # LoadDishwasher with discrete_state_input
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_load_dishwasher_action_dim12_discrete_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/LoadDishwasher/20250717/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(59, 36)],
+            fixture_refs={"dishwasher": "dishwasher_1_island_group_1", "counter": "island_island_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — ep 4: layout=25, style=29
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l25_s29",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(25, 29)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group", "cab": "cab_4_main_group"},
+            num_demos=1,
+            eval_dataset_path=f"{DATA_ROOT}/data_dumps/robocasa/pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l25_s29",
+            eval_init_mode="exact_state_replay",
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.025,
+            eval_object_pose_noise=0.025,
+            eval_object_ori_noise=0.025,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — ep 4: layout=25, style=29 — discrete state
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l25_s29_discrete_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(25, 29)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group", "cab": "cab_4_main_group"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — ep 5: layout=50, style=53
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l50_s53",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(50, 53)],
+            fixture_refs={"coffee_machine": "coffee_machine_right_group_1", "cab": "hingecabinet_3_right_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PrepareCoffee (composite) — layout=50, style=53 (original lora, no vision fullft)
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_prepare_coffee",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(50, 53)],
+            fixture_refs={"coffee_machine": "coffee_machine_right_group_1", "cab": "hingecabinet_3_right_group_1"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # PickPlaceFridgeDrawerToShelf (atomic) — layout=50, style=37
+    TrainConfig(
+        name="pi05_robocasa_single_task_lora_vision_fullft_action_pick_place_fridge_drawer_to_shelf_l50_s37",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/atomic/PickPlaceFridgeDrawerToShelf/20250821/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(50, 37)],
+            fixture_refs={"fridge": "fridgefrenchdoor_left_group_1"},
+            num_demos=1,
+            eval_dataset_path=f"{DATA_ROOT}/data_dumps/robocasa/pi05_robocasa_single_task_lora_vision_fullft_action_pick_place_fridge_drawer_to_shelf_l50_s37",
+            eval_init_mode="exact_state_replay",
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.025,
+            eval_object_pose_noise=0.1,
+            eval_object_ori_noise=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+
+    # PrepareCoffee (composite) — layout=25, style=29 — discrete state — JOINT CONTROL
+    TrainConfig(
+        name="pi05_robocasa_joint_control_prepare_coffee_l25_s29_discrete_state",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            # Must be True for pi0.5 so the 23D joint state is tokenized and
+            # fed to the model. Without it the DeltaActions transform produces
+            # state-dependent deltas but the model never sees the state.
+            discrete_state_input=True,
+        ),
+        data=LeRobotRobocasaJointDataConfig(
+            assets=AssetsConfig(
+                assets_dir=None,
+                asset_id="robocasa_joint",
+            ),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot_joint",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(25, 29)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group", "cab": "cab_4_main_group"},
+            num_demos=1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        # External RoboCasa action dim (7 arm + 1 gripper + 3 base + 1 torso + 1 mode).
+        # Pi0Config.action_dim remains 32 for the padded model interface.
+        action_dim=13,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):

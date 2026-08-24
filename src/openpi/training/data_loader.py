@@ -50,6 +50,226 @@ class DataLoader(Protocol[T_co]):
         raise NotImplementedError("Subclasses of DataLoader should implement __iter__.")
 
 
+class FilteredDataset(Dataset[T_co]):
+    """A dataset that filters samples based on a prompt match.
+
+    This implementation uses dataset metadata for fast filtering when available,
+    avoiding the need to load full samples during index building.
+    """
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        filter_prompt: str,
+        lerobot_dataset=None,
+        dataset_meta=None,
+        num_episodes: int = -1,
+        exclude_filter_prompt: bool = False,
+    ):
+        self._dataset = dataset
+        self._filter_prompt = filter_prompt
+        self._lerobot_dataset = lerobot_dataset
+        self._dataset_meta = dataset_meta
+        self._num_episodes = num_episodes
+        self._exclude_filter_prompt = exclude_filter_prompt
+        self._valid_indices = self._build_index()
+
+    def _build_index(self) -> list[int]:
+        """Build an index of valid samples that match the filter prompt."""
+        filter_type = "exclude" if self._exclude_filter_prompt else "include"
+        logging.info(f"Building index for prompt filter ({filter_type}): '{self._filter_prompt}'")
+        logging.info(f"Dataset length: {len(self._dataset)}")
+
+        # Try fast path using metadata
+        valid_indices = self._try_fast_filter()
+        if valid_indices is not None:
+            logging.info(
+                f"Filtered dataset (fast): {len(valid_indices)} / {len(self._dataset)} samples "
+                f"({filter_type} prompt '{self._filter_prompt}')"
+            )
+        else:
+            # Fallback to slow path
+            logging.info("Using slow path: loading samples individually...")
+            valid_indices = []
+            for i in range(len(self._dataset)):
+                if i % 1000 == 0 and i > 0:
+                    logging.info(f"Processing sample {i} of {len(self._dataset)}")
+
+                sample = self._dataset[i]
+                sample_prompt = sample.get('task', sample.get('prompt', None))
+
+                matches = (sample_prompt == self._filter_prompt)
+                if (matches and not self._exclude_filter_prompt) or (not matches and self._exclude_filter_prompt):
+                    valid_indices.append(i)
+
+            logging.info(
+                f"Filtered dataset: {len(valid_indices)} / {len(self._dataset)} samples "
+                f"({filter_type} prompt '{self._filter_prompt}')"
+            )
+
+        return valid_indices
+
+    def _try_fast_filter(self) -> list[int] | None:
+        """Try fast filtering using dataset metadata."""
+        if self._lerobot_dataset is None or self._dataset_meta is None:
+            return None
+
+        if not hasattr(self._lerobot_dataset, 'hf_dataset'):
+            return None
+
+        if not hasattr(self._dataset_meta, 'tasks'):
+            return None
+
+        try:
+            logging.info("Using fast path: accessing dataset metadata directly...")
+
+            hf_dataset = self._lerobot_dataset.hf_dataset
+
+            if 'task_index' not in hf_dataset.column_names:
+                logging.warning("No 'task_index' column found, falling back to slow path")
+                return None
+
+            if 'episode_index' not in hf_dataset.column_names:
+                logging.warning("No 'episode_index' column found, falling back to slow path")
+                return None
+
+            task_indices = hf_dataset['task_index']
+            episode_indices = hf_dataset['episode_index']
+            tasks_map = self._dataset_meta.tasks
+
+            valid_indices = []
+            episodes_seen = []
+            episodes_set = set()
+            task_episode_counts = {}
+
+            for i, (task_idx, ep_idx) in enumerate(zip(task_indices, episode_indices)):
+                if i % 10000 == 0 and i > 0:
+                    logging.info(f"  Processed {i} / {len(task_indices)} samples")
+
+                task_prompt = tasks_map.get(int(task_idx))
+                task_idx_int = int(task_idx)
+                ep_idx_int = int(ep_idx)
+
+                if task_idx_int not in task_episode_counts:
+                    task_episode_counts[task_idx_int] = set()
+                task_episode_counts[task_idx_int].add(ep_idx_int)
+
+                matches = (task_prompt == self._filter_prompt)
+                if (matches and not self._exclude_filter_prompt) or (not matches and self._exclude_filter_prompt):
+                    if ep_idx_int not in episodes_set:
+                        episodes_seen.append(ep_idx_int)
+                        episodes_set.add(ep_idx_int)
+
+                    valid_indices.append(i)
+
+            logging.info("\n=== Tasks Loaded ===")
+            total_episodes = 0
+            for task_idx in sorted(task_episode_counts.keys()):
+                task_name = tasks_map.get(task_idx, f"Unknown_{task_idx}")
+                num_eps = len(task_episode_counts[task_idx])
+                total_episodes += num_eps
+                logging.info(f"  Task '{task_name}': {num_eps} episodes")
+            logging.info(f"Total episodes loaded: {total_episodes}")
+            logging.info("=" * 50)
+
+            if not self._exclude_filter_prompt and self._num_episodes > 0 and len(episodes_seen) > self._num_episodes:
+                episodes_to_keep = set(episodes_seen[:self._num_episodes])
+
+                filtered_indices = []
+                for idx in valid_indices:
+                    ep_idx = int(episode_indices[idx])
+                    if ep_idx in episodes_to_keep:
+                        filtered_indices.append(idx)
+
+                logging.info(
+                    f"Limited dataset from {len(episodes_seen)} episodes to {self._num_episodes} episodes "
+                    f"({len(valid_indices)} samples -> {len(filtered_indices)} samples)"
+                )
+                valid_indices = filtered_indices
+            else:
+                logging.info(f"Dataset contains {len(episodes_seen)} episodes with {len(valid_indices)} total samples")
+
+            return valid_indices
+
+        except Exception as e:
+            logging.warning(f"Fast filtering failed: {e}. Falling back to slow path.")
+            return None
+
+    def __getitem__(self, index: SupportsIndex) -> T_co:
+        if index >= len(self._valid_indices):
+            raise IndexError(f"Index {index} out of range for filtered dataset")
+        actual_index = self._valid_indices[index]
+        return self._dataset[actual_index]
+
+    def __len__(self) -> int:
+        return len(self._valid_indices)
+
+
+class EpisodeFilteredDataset(Dataset[T_co]):
+    """A dataset that keeps only samples belonging to a specific set of episode IDs."""
+
+    def __init__(self, dataset: Dataset, episode_ids: Sequence[int], lerobot_dataset=None):
+        self._dataset = dataset
+        self._episode_ids = set(episode_ids)
+        self._valid_indices = self._build_index(lerobot_dataset)
+
+    def _build_index(self, lerobot_dataset) -> list[int]:
+        logging.info(f"Filtering dataset to episode IDs: {sorted(self._episode_ids)}")
+
+        # Fast path: use the raw LeRobot hf_dataset to look up episode_index
+        if lerobot_dataset is not None and hasattr(lerobot_dataset, 'hf_dataset'):
+            hf_dataset = lerobot_dataset.hf_dataset
+            if 'episode_index' in hf_dataset.column_names:
+                episode_indices = hf_dataset['episode_index']
+
+                if isinstance(self._dataset, FilteredDataset):
+                    inner_indices = self._dataset._valid_indices
+                    valid_indices = [
+                        i for i, orig_idx in enumerate(inner_indices)
+                        if int(episode_indices[orig_idx]) in self._episode_ids
+                    ]
+                else:
+                    valid_indices = [
+                        i for i, ep_idx in enumerate(episode_indices)
+                        if int(ep_idx) in self._episode_ids
+                    ]
+
+                if isinstance(self._dataset, FilteredDataset):
+                    found_eps = sorted({int(episode_indices[inner_indices[i]]) for i in valid_indices})
+                else:
+                    found_eps = sorted({int(episode_indices[i]) for i in valid_indices})
+                missing_eps = sorted(self._episode_ids - set(found_eps))
+                logging.info(
+                    f"\n=== EpisodeFilteredDataset ===\n"
+                    f"  Requested episode IDs: {sorted(self._episode_ids)}\n"
+                    f"  Found episode IDs:     {found_eps}\n"
+                    f"  Missing episode IDs:   {missing_eps}\n"
+                    f"  Samples kept: {len(valid_indices)} / {len(self._dataset)}\n"
+                    f"{'=' * 50}"
+                )
+                return valid_indices
+
+        # Slow fallback
+        logging.info("EpisodeFilteredDataset: using slow path (no episode_index column)")
+        valid_indices = []
+        for i in range(len(self._dataset)):
+            sample = self._dataset[i]
+            ep_idx = sample.get('episode_index', None)
+            if ep_idx is not None and int(ep_idx) in self._episode_ids:
+                valid_indices.append(i)
+        logging.info(
+            f"EpisodeFilteredDataset (slow): {len(valid_indices)} / {len(self._dataset)} samples"
+        )
+        return valid_indices
+
+    def __getitem__(self, index: SupportsIndex) -> T_co:
+        actual_index = self._valid_indices[index.__index__()]
+        return self._dataset[actual_index]
+
+    def __len__(self) -> int:
+        return len(self._valid_indices)
+
+
 class TransformedDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
         self._dataset = dataset
@@ -138,13 +358,41 @@ def create_torch_dataset(
         return FakeDataset(model_config, num_samples=1024)
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
-    dataset = lerobot_dataset.LeRobotDataset(
+
+    if hasattr(dataset_meta, 'tasks') and hasattr(dataset_meta, 'total_episodes'):
+        logging.info(f"Dataset: {repo_id} — {dataset_meta.total_episodes} episodes, {len(dataset_meta.tasks)} tasks")
+
+    lerobot_ds = lerobot_dataset.LeRobotDataset(
         data_config.repo_id,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
     )
 
+    # Validate: episode_ids and num_episodes cannot be used together
+    if data_config.episode_ids and data_config.num_episodes > 0:
+        raise ValueError(
+            "Cannot specify both 'episode_ids' and 'num_episodes'. "
+            "Use 'episode_ids' to select specific episodes, or 'num_episodes' to limit the count, but not both."
+        )
+
+    # Apply prompt filtering BEFORE transforms for efficiency
+    dataset = lerobot_ds
+    if data_config.filter_prompt is not None:
+        dataset = FilteredDataset(
+            dataset,
+            filter_prompt=data_config.filter_prompt,
+            lerobot_dataset=lerobot_ds,
+            dataset_meta=dataset_meta,
+            num_episodes=data_config.num_episodes,
+            exclude_filter_prompt=data_config.exclude_filter_prompt,
+        )
+
+    # Apply episode ID filtering AFTER prompt filtering so it operates on the correct subset
+    if data_config.episode_ids:
+        dataset = EpisodeFilteredDataset(dataset, data_config.episode_ids, lerobot_dataset=lerobot_ds)
+
+    # Apply transforms after filtering
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
 

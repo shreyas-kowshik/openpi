@@ -56,3 +56,45 @@ def _resize_with_pad_pil(image: Image.Image, height: int, width: int, method: in
     zero_image.paste(resized_image, (pad_width, pad_height))
     assert zero_image.size == (width, height)
     return zero_image
+
+import jax
+import jax.numpy as jnp
+
+def resize_with_pad_jax(images, height, width, method="bilinear"):
+    # images: [..., H, W, C]
+    orig_shape = images.shape
+    *batch_dims, H, W, C = orig_shape
+
+    # Compute scale ratio (broadcast over batch dims)
+    scale_h = height / H
+    scale_w = width / W
+    scale = jnp.minimum(scale_h, scale_w)
+
+    new_h = jnp.floor(H * scale).astype(int)
+    new_w = jnp.floor(W * scale).astype(int)
+
+    # Resize (JAX handles batches)
+    resized = jax.image.resize(
+        images,
+        (*batch_dims, new_h, new_w, C),
+        method,
+    )
+
+    # Compute pad sizes
+    pad_h = (height - new_h) // 2
+    pad_w = (width - new_w) // 2
+
+    pad_top = pad_h
+    pad_bottom = height - new_h - pad_h
+    pad_left = pad_w
+    pad_right = width - new_w - pad_w
+
+    padded = jnp.pad(resized,
+                     (*[(0,0)]*len(batch_dims),
+                      (pad_top, pad_bottom),
+                      (pad_left, pad_right),
+                      (0,0)),
+                     mode='constant')
+
+    return padded
+

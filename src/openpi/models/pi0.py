@@ -221,6 +221,7 @@ class Pi0(_model.BaseModel):
         *,
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
+        vlm_depth: int | at.Int[at.Array, ""] | None = None,
     ) -> _model.Actions:
         observation = _model.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
@@ -235,6 +236,20 @@ class Pi0(_model.BaseModel):
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
         _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+
+        # Layer-depth ablation (inference-only): freeze the VLM prefix K/V at depth `vlm_depth`.
+        # `kv_cache` is (k, v), each shaped [L, B, T_prefix, K, H] with layer on the leading axis.
+        # Remap the layer axis so layers >= vlm_depth reuse layer (vlm_depth - 1)'s K/V; the action
+        # expert then cross-attends to the frozen lower-layer representation at its upper layers.
+        # We gather with jnp.take (not in-place .at[].set) so vlm_depth stays a traced value: no
+        # per-`d` static recompile under module_jit, and no dynamic-size slice. RoPE is already
+        # baked into the cached K/V using position (not layer) indices, so the reuse is positionally
+        # valid. At vlm_depth == L, src == arange(L) -> identity -> exact baseline.
+        if vlm_depth is not None:
+            k, v = kv_cache
+            num_layers = k.shape[0]
+            src = jnp.minimum(jnp.arange(num_layers), vlm_depth - 1)
+            kv_cache = (jnp.take(k, src, axis=0), jnp.take(v, src, axis=0))
 
         def step(carry):
             x_t, time = carry
@@ -277,3 +292,17 @@ class Pi0(_model.BaseModel):
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0
+
+    def get_prefix_rep(self, observation: _model.Observation):
+        """Returns the VLM hidden-state representations for images + language.
+
+        Output: (hidden_state, kv_cache) where hidden_state has shape [B, S_prefix, W].
+        """
+        observation = _model.preprocess_observation(None, observation, train=False)
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        (hidden_state, _), kv_cache = self.PaliGemma.llm(
+            [prefix_tokens, None], mask=prefix_attn_mask, positions=positions
+        )
+        return hidden_state, kv_cache

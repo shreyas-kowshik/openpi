@@ -53,6 +53,19 @@ NOTE: `GIT_LFS_SKIP_SMUDGE=1` is needed to pull LeRobot as a dependency.
 
 **Docker**: As an alternative to uv installation, we provide instructions for installing openpi using Docker. If you encounter issues with your system setup, consider using Docker to simplify installation. See [Docker Setup](docs/docker.md) for more details.
 
+### Configuring Storage Locations
+
+The training configs in this fork reference datasets, checkpoints, and assets through a set of storage-root environment variables. Set them to match your machine (or rely on the repo-relative defaults):
+
+| Environment variable | Purpose | Default |
+| --- | --- | --- |
+| `OPENPI_DATASET_ROOT` | Root directory for datasets (e.g., RoboCasa LeRobot dumps, DROID RLDS) | `./data` |
+| `OPENPI_CHECKPOINT_ROOT` | Root directory for training outputs / fine-tuned checkpoints | `./checkpoints` |
+| `OPENPI_ASSETS_ROOT` | Root directory for assets such as normalization stats | `./assets` |
+| `OPENPI_DATA_HOME` | Cache directory for auto-downloaded artifacts (e.g., `gs://openpi-assets` checkpoints) | `~/.cache/openpi` |
+
+Publicly released pre-trained models are referenced directly via `gs://openpi-assets` and downloaded automatically on first use. Configs that load fine-tuned checkpoints expect them under `OPENPI_CHECKPOINT_ROOT`; train the corresponding config first (or adjust the paths in `src/openpi/training/config.py`) before using them.
+
 
 
 

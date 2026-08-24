@@ -106,3 +106,11 @@ class Pi0Config(_model.BaseModelConfig):
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)
+    
+    def get_freeze_filter_full(self) -> nnx.filterlib.Filter:
+        # return nnx.All(
+        #     nnx_utils.PathRegex(".*llm.*"),
+        #     nnx_utils.PathRegex(".*llm.*_1.*"),
+        # )
+        return nnx_utils.PathRegex(".*llm.*")
+

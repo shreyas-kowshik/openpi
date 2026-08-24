@@ -52,23 +52,45 @@ class LiberoInputs(transforms.DataTransformFn):
         base_image = _parse_image(data["observation/image"])
         wrist_image = _parse_image(data["observation/wrist_image"])
 
-        # Create inputs dict. Do not change the keys in the dict below.
-        inputs = {
-            "state": data["observation/state"],
-            "image": {
+        if base_image.ndim == 3:
+            # ----- per-sample case -----
+            image = {
                 "base_0_rgb": base_image,
                 "left_wrist_0_rgb": wrist_image,
-                # Pad any non-existent images with zero-arrays of the appropriate shape.
                 "right_wrist_0_rgb": np.zeros_like(base_image),
-            },
-            "image_mask": {
+            }
+            image_mask = {
                 "base_0_rgb": np.True_,
                 "left_wrist_0_rgb": np.True_,
-                # We only mask padding images for pi0 model, not pi0-FAST. Do not change this for your own dataset.
-                "right_wrist_0_rgb": np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_,
-            },
-        }
+                "right_wrist_0_rgb": np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_
+                ,
+            }
+        elif base_image.ndim == 4:
+            # ----- batched / temporal case: (T, H, W, C) -----
+            T = base_image.shape[0]
+            image = {
+                "base_0_rgb": base_image,
+                "left_wrist_0_rgb": wrist_image,
+                "right_wrist_0_rgb": np.zeros_like(base_image),
+            }
+            # masks now have a time dimension so you can do mask[:-1], tf.gather, etc.
+            image_mask = {
+                "base_0_rgb": np.ones((T,), dtype=bool),
+                "left_wrist_0_rgb": np.ones((T,), dtype=bool),
+                "right_wrist_0_rgb": (
+                    np.ones((T,), dtype=bool)
+                    if self.model_type == _model.ModelType.PI0_FAST
+                    else np.zeros((T,), dtype=bool)
+                ),
+            }
+        else:
+            raise ValueError(f"Unexpected base_image ndim={base_image.ndim}, shape={base_image.shape}")
 
+        inputs = {
+            "state": data["observation/state"],
+            "image": image,
+            "image_mask": image_mask,
+        }
         # Pad actions to the model action dimension. Keep this for your own dataset.
         # Actions are only available during training.
         if "actions" in data:
@@ -97,4 +119,20 @@ class LiberoOutputs(transforms.DataTransformFn):
         # dimension, we need to now parse out the correct number of actions in the return dict.
         # For Libero, we only return the first 7 actions (since the rest is padding).
         # For your own dataset, replace `7` with the action dimension of your dataset.
-        return {"actions": np.asarray(data["actions"][:, :7])}
+        actions = np.asarray(data["actions"])
+
+        # We only want first 7 dims
+        D_out = 7
+
+        # Case 1: unbatched (H, D)
+        if actions.ndim == 2:
+            # Return (H, 7)
+            return {"actions": actions[:, :D_out]}
+
+        # Case 2: batched (B, H, D)
+        elif actions.ndim == 3:
+            # Return (B, H, 7)
+            return {"actions": actions[:, :, :D_out]}
+
+        else:
+            raise ValueError(f"Unexpected action shape in LiberoOutputs: {actions.shape}")
