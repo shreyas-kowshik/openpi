@@ -21,6 +21,14 @@ from openpi.shared import nnx_utils
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 
+def _strip_single_prompt_batch(inputs: dict) -> dict:
+    """Remove the singleton prompt axis produced for one unbatched prompt."""
+    for key in ("tokenized_prompt", "tokenized_prompt_mask"):
+        if key in inputs and hasattr(inputs[key], "ndim") and inputs[key].ndim >= 2:
+            inputs[key] = inputs[key][0]
+    return inputs
+
+
 class Policy(BasePolicy):
     def __init__(
         self,
@@ -71,6 +79,10 @@ class Policy(BasePolicy):
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
+        # TokenizePrompt represents a single prompt as (1, L). Policy.infer
+        # accepts one unbatched observation and adds the model batch below, so
+        # remove that transform-level singleton first to avoid (1, 1, L).
+        inputs = _strip_single_prompt_batch(inputs)
         if not self._is_pytorch_model:
             # Make a batch and convert to jax.Array.
             inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
@@ -118,9 +130,7 @@ class Policy(BasePolicy):
         inputs = self._input_transform(inputs)
         # TokenizePrompt adds a leading (1,) dim for single prompts; remove it before
         # the [np.newaxis] expansion so tokenized_prompt ends up (1, L) not (1, 1, L).
-        for key in ("tokenized_prompt", "tokenized_prompt_mask"):
-            if key in inputs and hasattr(inputs[key], "ndim") and inputs[key].ndim >= 2:
-                inputs[key] = inputs[key][0]
+        inputs = _strip_single_prompt_batch(inputs)
         inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
         return self._get_prefix_rep(_model.Observation.from_dict(inputs))
 
