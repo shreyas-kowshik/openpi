@@ -37,11 +37,15 @@ Filter: TypeAlias = nnx.filterlib.Filter
 # Local storage roots used by the configs below. Override these environment variables to point
 # to wherever you store datasets, fine-tuned checkpoints, and assets (e.g., norm stats) on your machine:
 #   OPENPI_DATASET_ROOT     -- root directory for datasets (e.g., RoboCasa LeRobot dumps, DROID RLDS).
+#   ROBOCASA_EVAL_DATA_ROOT -- root directory for RoboCasa exact-replay evaluation dumps.
 #   OPENPI_CHECKPOINT_ROOT  -- root directory for training outputs / fine-tuned checkpoints.
 #   OPENPI_ASSETS_ROOT      -- root directory for assets such as normalization stats.
 # Publicly released pre-trained models are referenced directly via gs://openpi-assets and are
 # downloaded automatically (see openpi.shared.download, cache location controlled by OPENPI_DATA_HOME).
 DATA_ROOT = os.environ.get("OPENPI_DATASET_ROOT", "./data")
+ROBOCASA_EVAL_DATA_ROOT = os.environ.get(
+    "ROBOCASA_EVAL_DATA_ROOT", f"{DATA_ROOT}/data_dumps/robocasa"
+)
 CHECKPOINT_ROOT = os.environ.get("OPENPI_CHECKPOINT_ROOT", "./checkpoints")
 ASSETS_ROOT = os.environ.get("OPENPI_ASSETS_ROOT", "./assets")
 
@@ -3181,6 +3185,168 @@ _CONFIGS = [
     ),
 
     ###########################
+
+    ###############################################################################
+    # MiDAS
+    ###############################################################################
+    # Frozen task-finetuned Pi-0.5 policy used by the LIBERO-10 task-8 MIDAS launcher:
+    # experiments/libero/run_midas_task8_both_mokapots_paper_v1.slurm
+    TrainConfig(
+        name="midas_pi05_libero10_both_mokapots_stove_ep1",
+        model=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt="put both moka pots on the stove",
+                num_episodes=1,
+            ),
+            extra_delta_transform=False,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+    ),
+    # Frozen task-finetuned Pi-0.5 policy used by the RoboCasa MIDAS launchers.
+    TrainConfig(
+        name="midas_pi05_robocasa_pick_place_counter_to_cabinet_exact_replay_l1_s1_ep32",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(assets_dir=None, asset_id="robocasa"),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/target/atomic/PickPlaceCounterToCabinet/20250811/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(1, 1)],
+            fixture_refs={"cab": "cab_3_main_group", "counter": "counter_right_main_group"},
+            episode_ids=[32],
+            num_demos=1,
+            eval_dataset_path=(
+                f"{ROBOCASA_EVAL_DATA_ROOT}/"
+                "pi05_robocasa_single_task_lora_exact_replay_l1_s1_ep32"
+            ),
+            eval_init_mode="exact_state_replay",
+            eval_pool_episode_ids=[32],
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.0,
+            eval_object_pose_noise=0.0,
+            eval_object_ori_noise=0.0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    TrainConfig(
+        name="midas_pi05_robocasa_pick_place_fridge_drawer_to_shelf_l50_s37",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(assets_dir=None, asset_id="robocasa"),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/atomic/PickPlaceFridgeDrawerToShelf/20250821/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(50, 37)],
+            fixture_refs={"fridge": "fridgefrenchdoor_left_group_1"},
+            num_demos=1,
+            eval_dataset_path=(
+                f"{ROBOCASA_EVAL_DATA_ROOT}/"
+                "pi05_robocasa_single_task_lora_vision_fullft_action_"
+                "pick_place_fridge_drawer_to_shelf_l50_s37"
+            ),
+            eval_init_mode="exact_state_replay",
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.025,
+            eval_object_pose_noise=0.1,
+            eval_object_ori_noise=0.5,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    TrainConfig(
+        name="midas_pi05_robocasa_prepare_coffee_l25_s29_var1",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(assets_dir=None, asset_id="robocasa"),
+            data_dirs=[{
+                "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                "filter_key": None,
+            }],
+            layout_and_style_ids=[(25, 29)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group", "cab": "cab_4_main_group"},
+            num_demos=1,
+            eval_dataset_path=(
+                f"{ROBOCASA_EVAL_DATA_ROOT}/"
+                "pi05_robocasa_single_task_lora_vision_fullft_action_prepare_coffee_l25_s29"
+            ),
+            eval_init_mode="exact_state_replay",
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.025,
+            eval_object_pose_noise=0.025,
+            eval_object_ori_noise=0.025,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/pi05_robocasa_exps/",
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
+        action_dim=12,
+        ema_decay=None,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=4000,
+        keep_period=1000,
+        num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
 
 
     ##### DEBUG CONFIGS #####
