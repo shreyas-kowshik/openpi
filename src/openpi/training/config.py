@@ -21,10 +21,11 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
+import openpi.policies.robocasa_policy as robocasa_policy
+import openpi.policies.yam_policy as yam_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
-import openpi.policies.robocasa_policy as robocasa_policy
 import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
@@ -134,6 +135,13 @@ class DataConfig:
     # Specific episode IDs to load. If empty (default), all episodes are loaded using the
     # existing dataloading mechanism. If non-empty, only samples from these episode IDs are used.
     episode_ids: Sequence[int] = ()
+
+    # Optional whole-episode selection used by the YAM combined dataset. The
+    # feature is constant within each episode and records the source trajectory
+    # identifier rather than LeRobot's sequential episode index.
+    filter_orig_traj_id_6_eq: int | None = None
+    filter_orig_traj_id_6_min: int | None = None
+    filter_orig_traj_id_6_max: int | None = None
 
     # Task description for HDF5-only datasets (e.g. robomimic) that don't have embedded language annotations.
     task_description: str = ""
@@ -819,6 +827,96 @@ class TrainConfig:
     def __post_init__(self) -> None:
         if self.resume and self.overwrite:
             raise ValueError("Cannot resume and overwrite at the same time.")
+
+
+def _yam_train_config(
+    name: str,
+    prompt: str,
+    *,
+    trajectory_id_equal: int | None = None,
+    trajectory_id_min: int | None = None,
+    trajectory_id_max: int | None = None,
+) -> TrainConfig:
+    """Build one checkpoint-compatible YAM Pi0.5 LoRA configuration."""
+
+    filtered = any(
+        value is not None
+        for value in (trajectory_id_equal, trajectory_id_min, trajectory_id_max)
+    ) or prompt != "perform the task"
+    return TrainConfig(
+        name=name,
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=60,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=SimpleDataConfig(
+            repo_id="local/yam_combined",
+            assets=(
+                AssetsConfig(
+                    assets_dir=f"{ASSETS_ROOT}/pi05_yam_combined_lora",
+                    asset_id="local/yam_combined",
+                )
+                if filtered
+                else AssetsConfig()
+            ),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[
+                    yam_policy.YamInputs(),
+                    _transforms.DeltaActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                ],
+                outputs=[
+                    _transforms.AbsoluteActions(_transforms.make_bool_mask(6, -1, 6, -1)),
+                    yam_policy.YamOutputs(),
+                ],
+            ),
+            model_transforms=ModelTransformFactory(default_prompt=prompt),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                filter_prompt=None if prompt == "perform the task" else prompt,
+                filter_orig_traj_id_6_eq=trajectory_id_equal,
+                filter_orig_traj_id_6_min=trajectory_id_min,
+                filter_orig_traj_id_6_max=trajectory_id_max,
+                repack_transforms=_transforms.Group(
+                    inputs=[
+                        _transforms.RepackTransform(
+                            {
+                                "images": {
+                                    "top": "observation.images.top",
+                                    "left_wrist": "observation.images.left_wrist",
+                                    "right_wrist": "observation.images.right_wrist",
+                                },
+                                "state": "observation.state",
+                                "actions": "action",
+                                "prompt": "prompt",
+                            }
+                        )
+                    ]
+                ),
+                action_sequence_keys=("action",),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=10_000,
+            decay_lr=2.5e-6,
+        ),
+        ema_decay=None,
+        num_train_steps=20_000,
+        log_interval=1,
+        save_interval=5_000,
+        keep_period=5_000,
+    )
 
 
 # Use `get_config` if you need to get a config by name in your code.
@@ -3185,6 +3283,44 @@ _CONFIGS = [
     ),
 
     ###########################
+
+    ###############################################################################
+    # YAM real-world frozen-policy configurations
+    ###############################################################################
+    _yam_train_config("pi05_yam_combined_lora", "perform the task"),
+    _yam_train_config(
+        "pi05_yam_pickplace_a_lora",
+        "put the green block in the right bin and the blue block in the left bin",
+        trajectory_id_equal=14512,
+    ),
+    _yam_train_config(
+        "pi05_yam_pickplace_b_lora",
+        "put the green block in the right bin and the blue block in the left bin",
+        trajectory_id_min=14512,
+    ),
+    _yam_train_config(
+        "pi05_yam_arrange_a_lora",
+        "place the knife and the donut on the plate",
+        trajectory_id_equal=25632,
+    ),
+    _yam_train_config(
+        "pi05_yam_arrange_all_lora",
+        "place the knife and the donut on the plate",
+    ),
+    _yam_train_config(
+        "pi05_yam_wipe_a_lora",
+        "Wipe the black tray with the white cloth",
+        trajectory_id_equal=43505,
+    ),
+    _yam_train_config(
+        "pi05_yam_wipe_b_lora",
+        "Wipe the black tray with the white cloth",
+        trajectory_id_max=43214,
+    ),
+    _yam_train_config(
+        "pi05_yam_wipe_all_lora",
+        "Wipe the black tray with the white cloth",
+    ),
 
     ###############################################################################
     # MiDAS

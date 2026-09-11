@@ -7,7 +7,10 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
-import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
+try:
+    import lerobot.datasets.lerobot_dataset as lerobot_dataset
+except ImportError:  # LeRobot releases before the package namespace migration.
+    import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
 
@@ -222,22 +225,18 @@ class EpisodeFilteredDataset(Dataset[T_co]):
             if 'episode_index' in hf_dataset.column_names:
                 episode_indices = hf_dataset['episode_index']
 
-                if isinstance(self._dataset, FilteredDataset):
-                    inner_indices = self._dataset._valid_indices
-                    valid_indices = [
-                        i for i, orig_idx in enumerate(inner_indices)
-                        if int(episode_indices[orig_idx]) in self._episode_ids
-                    ]
-                else:
-                    valid_indices = [
-                        i for i, ep_idx in enumerate(episode_indices)
-                        if int(ep_idx) in self._episode_ids
-                    ]
-
-                if isinstance(self._dataset, FilteredDataset):
-                    found_eps = sorted({int(episode_indices[inner_indices[i]]) for i in valid_indices})
-                else:
-                    found_eps = sorted({int(episode_indices[i]) for i in valid_indices})
+                valid_indices = [
+                    i
+                    for i in range(len(self._dataset))
+                    if int(episode_indices[_raw_dataset_index(self._dataset, i)])
+                    in self._episode_ids
+                ]
+                found_eps = sorted(
+                    {
+                        int(episode_indices[_raw_dataset_index(self._dataset, i)])
+                        for i in valid_indices
+                    }
+                )
                 missing_eps = sorted(self._episode_ids - set(found_eps))
                 logging.info(
                     f"\n=== EpisodeFilteredDataset ===\n"
@@ -265,6 +264,70 @@ class EpisodeFilteredDataset(Dataset[T_co]):
     def __getitem__(self, index: SupportsIndex) -> T_co:
         actual_index = self._valid_indices[index.__index__()]
         return self._dataset[actual_index]
+
+    def __len__(self) -> int:
+        return len(self._valid_indices)
+
+
+def _raw_dataset_index(dataset: Dataset, index: int) -> int:
+    """Map an index through stacked filtering wrappers to the LeRobot row."""
+
+    while hasattr(dataset, "_valid_indices") and hasattr(dataset, "_dataset"):
+        index = dataset._valid_indices[index]  # noqa: SLF001
+        dataset = dataset._dataset  # noqa: SLF001
+    return int(index)
+
+
+class FeatureRangeFilteredDataset(Dataset[T_co]):
+    """Filter complete YAM trajectories by the constant ``orig_traj_id_6`` feature."""
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        *,
+        lerobot_dataset,
+        equal: int | None = None,
+        minimum: int | None = None,
+        maximum: int | None = None,
+    ):
+        self._dataset = dataset
+        self._equal = equal
+        self._minimum = minimum
+        self._maximum = maximum
+        if equal is not None and (minimum is not None or maximum is not None):
+            raise ValueError("orig_traj_id_6 equality cannot be combined with min/max filters")
+        self._valid_indices = self._build_index(lerobot_dataset)
+
+    def _matches(self, value: int) -> bool:
+        return (
+            (self._equal is None or value == self._equal)
+            and (self._minimum is None or value >= self._minimum)
+            and (self._maximum is None or value <= self._maximum)
+        )
+
+    def _build_index(self, lerobot_dataset) -> list[int]:
+        if not hasattr(lerobot_dataset, "hf_dataset"):
+            raise ValueError("orig_traj_id_6 filtering requires a LeRobot hf_dataset")
+        hf_dataset = lerobot_dataset.hf_dataset
+        if "orig_traj_id_6" not in hf_dataset.column_names:
+            raise ValueError("Dataset lacks orig_traj_id_6 required by the selected YAM config")
+        values = hf_dataset["orig_traj_id_6"]
+        valid_indices = [
+            index
+            for index in range(len(self._dataset))
+            if self._matches(int(np.asarray(values[_raw_dataset_index(self._dataset, index)]).reshape(-1)[0]))
+        ]
+        if not valid_indices:
+            raise ValueError("orig_traj_id_6 filter matched no dataset samples")
+        logging.info(
+            "Filtered YAM dataset by orig_traj_id_6: %d / %d samples",
+            len(valid_indices),
+            len(self._dataset),
+        )
+        return valid_indices
+
+    def __getitem__(self, index: SupportsIndex) -> T_co:
+        return self._dataset[self._valid_indices[index.__index__()]]
 
     def __len__(self) -> int:
         return len(self._valid_indices)
@@ -386,6 +449,20 @@ def create_torch_dataset(
             dataset_meta=dataset_meta,
             num_episodes=data_config.num_episodes,
             exclude_filter_prompt=data_config.exclude_filter_prompt,
+        )
+
+    feature_filter = (
+        data_config.filter_orig_traj_id_6_eq,
+        data_config.filter_orig_traj_id_6_min,
+        data_config.filter_orig_traj_id_6_max,
+    )
+    if any(value is not None for value in feature_filter):
+        dataset = FeatureRangeFilteredDataset(
+            dataset,
+            lerobot_dataset=lerobot_ds,
+            equal=feature_filter[0],
+            minimum=feature_filter[1],
+            maximum=feature_filter[2],
         )
 
     # Apply episode ID filtering AFTER prompt filtering so it operates on the correct subset

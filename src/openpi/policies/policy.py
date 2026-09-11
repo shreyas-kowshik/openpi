@@ -75,7 +75,14 @@ class Policy(BasePolicy):
                 self._get_prefix_rep = nnx_utils.module_jit(model.get_prefix_rep)
 
     @override
-    def infer(self, obs: dict, *, noise: np.ndarray | None = None, return_vlm_embedding: bool = False) -> dict:  # type: ignore[misc]
+    def infer(
+        self,
+        obs: dict,
+        *,
+        noise: np.ndarray | None = None,
+        return_vlm_embedding: bool = False,
+        return_normalized: bool = False,
+    ) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
@@ -113,7 +120,8 @@ class Policy(BasePolicy):
         else:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 
-        outputs = self._output_transform(outputs)
+        if not return_normalized:
+            outputs = self.apply_output_transforms(outputs)
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }
@@ -123,6 +131,11 @@ class Policy(BasePolicy):
             outputs["vlm_embedding"] = vlm_embedding
 
         return outputs
+
+    def apply_output_transforms(self, outputs: dict) -> dict:
+        """Apply configured denormalization/robot transforms to normalized output."""
+
+        return self._output_transform(outputs)
 
     def get_prefix_rep(self, obs: dict):
         """Returns (hidden_state, kv_cache) from the VLM prefix pass, without generating actions."""
