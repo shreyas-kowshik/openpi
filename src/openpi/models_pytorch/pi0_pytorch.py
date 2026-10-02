@@ -169,13 +169,14 @@ class PI0Pytorch(nn.Module):
             observation.state,
         )
 
-    def sample_noise(self, shape, device):
+    def sample_noise(self, shape, device, generator=None):
         return torch.normal(
             mean=0.0,
             std=1.0,
             size=shape,
             dtype=torch.float32,
             device=device,
+            generator=generator,
         )
 
     def sample_time(self, bsize, device):
@@ -373,12 +374,12 @@ class PI0Pytorch(nn.Module):
         return F.mse_loss(u_t, v_t, reduction="none")
 
     @torch.no_grad()
-    def sample_actions(self, device, observation, noise=None, num_steps=10) -> Tensor:
+    def sample_actions(self, device, observation, noise=None, num_steps=10, generator=None) -> Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
         bsize = observation.state.shape[0]
         if noise is None:
             actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
-            noise = self.sample_noise(actions_shape, device)
+            noise = self.sample_noise(actions_shape, device, generator=generator)
 
         images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=False)
 

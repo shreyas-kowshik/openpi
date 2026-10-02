@@ -41,6 +41,7 @@ class Policy(BasePolicy):
         metadata: dict[str, Any] | None = None,
         pytorch_device: str = "cpu",
         is_pytorch: bool = False,
+        seed: int = 0,
     ):
         """Initialize the Policy.
 
@@ -54,6 +55,7 @@ class Policy(BasePolicy):
             pytorch_device: Device to use for PyTorch models (e.g., "cpu", "cuda:0").
                           Only relevant when is_pytorch=True.
             is_pytorch: Whether the model is a PyTorch model. If False, assumes JAX model.
+            seed: Seed for this policy's private action-sampling stream.
         """
         self._model = model
         self._input_transform = _transforms.compose(transforms)
@@ -67,10 +69,12 @@ class Policy(BasePolicy):
             self._model = self._model.to(pytorch_device)
             self._model.eval()
             self._sample_actions = model.sample_actions
+            self._torch_generator = torch.Generator(device=pytorch_device)
+            self._torch_generator.manual_seed(int(seed))
         else:
             # JAX model setup
             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
-            self._rng = rng or jax.random.key(0)
+            self._rng = rng if rng is not None else jax.random.key(int(seed))
             if hasattr(model, "get_prefix_rep"):
                 self._get_prefix_rep = nnx_utils.module_jit(model.get_prefix_rep)
 
@@ -101,6 +105,8 @@ class Policy(BasePolicy):
 
         # Prepare kwargs for sample_actions
         sample_kwargs = dict(self._sample_kwargs)
+        if self._is_pytorch_model:
+            sample_kwargs.setdefault("generator", self._torch_generator)
         if noise is not None:
             noise = torch.from_numpy(noise).to(self._pytorch_device) if self._is_pytorch_model else jnp.asarray(noise)
 
@@ -131,6 +137,50 @@ class Policy(BasePolicy):
             outputs["vlm_embedding"] = vlm_embedding
 
         return outputs
+
+    def seed(self, seed: int) -> None:
+        """Reset this policy's private action-sampling stream."""
+
+        if self._is_pytorch_model:
+            self._torch_generator.manual_seed(int(seed))
+        else:
+            self._rng = jax.random.key(int(seed))
+
+    def get_rng_state(self) -> dict:
+        """Return a host-resident RNG snapshot suitable for checkpointing."""
+
+        if self._is_pytorch_model:
+            return {
+                "framework": "torch",
+                "state": self._torch_generator.get_state().cpu().numpy(),
+            }
+        return {
+            "framework": "jax",
+            "key_data": np.asarray(jax.random.key_data(self._rng)),
+            "implementation": str(jax.random.key_impl(self._rng)),
+        }
+
+    def set_rng_state(self, state: dict) -> None:
+        """Restore a state returned by :meth:`get_rng_state`."""
+
+        framework = state.get("framework")
+        if framework == "torch" and self._is_pytorch_model:
+            # Network/msgpack decoders may return a read-only NumPy view.  Torch
+            # warns that wrapping it directly permits undefined writes, so own
+            # the small generator-state buffer before restoring it.
+            value = torch.tensor(np.array(state["state"], copy=True), dtype=torch.uint8, device="cpu")
+            self._torch_generator.set_state(value)
+            return
+        if framework == "jax" and not self._is_pytorch_model:
+            self._rng = jax.random.wrap_key_data(
+                jnp.asarray(state["key_data"], dtype=jnp.uint32),
+                impl=state.get("implementation"),
+            )
+            return
+        raise ValueError(
+            f"Cannot restore {framework!r} RNG state into "
+            f"{'PyTorch' if self._is_pytorch_model else 'JAX'} policy"
+        )
 
     def apply_output_transforms(self, outputs: dict) -> dict:
         """Apply configured denormalization/robot transforms to normalized output."""
