@@ -74,6 +74,7 @@ def test_tokenize_prompt():
     data = transform({"prompt": "Hello, world!"})
 
     tok_prompt, tok_mask = tokenizer.tokenize("Hello, world!")
+    assert data["tokenized_prompt"].shape == (12,)
     assert np.allclose(tok_prompt, data["tokenized_prompt"])
     assert np.allclose(tok_mask, data["tokenized_prompt_mask"])
 
@@ -119,3 +120,47 @@ def test_extract_prompt_from_task():
 
     with pytest.raises(ValueError, match="task_index=2 not found in task mapping"):
         transform({"task_index": 2})
+
+
+class _DummyTokenizer:
+    def tokenize(self, prompt, state=None, actions=None):
+        tokens = np.arange(4)
+        mask = np.ones(4, dtype=bool)
+        return (tokens, mask, mask, mask) if actions is not None else (tokens, mask)
+
+
+def test_resize_images_is_applied_before_batching():
+    transform = _transforms.ResizeImages(224, 224)
+    single = transform({"image": {"base": np.zeros((256, 128, 3), dtype=np.uint8)}})
+    batch = transform({"image": {"base": np.zeros((2, 256, 128, 3), dtype=np.uint8)}})
+    assert single["image"]["base"].shape == (224, 224, 3)
+    assert batch["image"]["base"].shape == (2, 224, 224, 3)
+
+
+@pytest.mark.parametrize(
+    ("prompt", "shape"),
+    [
+        ("mug", (4,)),
+        (np.asarray(b"mug"), (4,)),
+        (["mug"], (1, 4)),
+        (np.asarray(["mug", "banana"]), (2, 4)),
+    ],
+)
+def test_prompt_shape_preserves_input_batch_contract(prompt, shape):
+    output = _transforms.TokenizePrompt(_DummyTokenizer())({"prompt": prompt})
+    assert output["tokenized_prompt"].shape == shape
+    assert output["tokenized_prompt_mask"].shape == shape
+
+
+@pytest.mark.parametrize("batched", [False, True])
+def test_fast_prompt_shape_preserves_input_batch_contract(batched):
+    data = {"prompt": ["mug"] if batched else "mug", "state": np.zeros(3), "actions": np.zeros((2, 3))}
+    output = _transforms.TokenizeFASTInputs(_DummyTokenizer())(data)
+    for key in ("tokenized_prompt", "tokenized_prompt_mask", "token_ar_mask", "token_loss_mask"):
+        assert output[key].shape == ((1, 4) if batched else (4,))
+
+
+def test_fast_mismatched_prompt_and_action_batches_fail():
+    data = {"prompt": ["mug"], "state": np.zeros((1, 3)), "actions": np.zeros((2, 2, 3))}
+    with pytest.raises(ValueError, match="Batched actions and prompt lengths"):
+        _transforms.TokenizeFASTInputs(_DummyTokenizer())(data)

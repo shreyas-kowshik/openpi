@@ -185,10 +185,12 @@ class Unnormalize(DataTransformFn):
 class ResizeImages(DataTransformFn):
     height: int
     width: int
-    # TODO Raise error and dont call this 
+
     def __call__(self, data: DataDict) -> DataDict:
-        # data["image"] = {k: image_tools.resize_with_pad(v, self.height, self.width) for k, v in data["image"].items()}
-        # data["image"] = {k: image_tools.resize_with_pad_jax(v, self.height, self.width) for k, v in data["image"].items()}
+        data["image"] = {
+            key: image_tools.resize_with_pad(np.asarray(value), self.height, self.width)
+            for key, value in data["image"].items()
+        }
         return data
 
 
@@ -253,27 +255,6 @@ class AbsoluteActions(DataTransformFn):
         return data
 
 
-# @dataclasses.dataclass(frozen=True)
-# class TokenizePrompt(DataTransformFn):
-#     tokenizer: _tokenizer.PaligemmaTokenizer
-#     discrete_state_input: bool = False
-
-#     def __call__(self, data: DataDict) -> DataDict:
-#         if (prompt := data.pop("prompt", None)) is None:
-#             raise ValueError("Prompt is required")
-
-#         if self.discrete_state_input:
-#             if (state := data.get("state", None)) is None:
-#                 raise ValueError("State is required.")
-#         else:
-#             state = None
-
-#         if not isinstance(prompt, str):
-#             prompt = prompt.item()
-        
-#         tokens, token_masks = self.tokenizer.tokenize(prompt, state)
-#         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
-
 @dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
@@ -284,11 +265,11 @@ class TokenizePrompt(DataTransformFn):
             x = x.item()
 
         # numpy.bytes_ → decode
-        if isinstance(x, (bytes, np.bytes_)):
+        if isinstance(x, bytes | np.bytes_):
             return x.decode("utf-8")
 
         # numpy.str_ → convert to Python str
-        if isinstance(x, (str, np.str_)):
+        if isinstance(x, str | np.str_):
             return str(x)
 
         raise TypeError(f"Invalid prompt type {type(x)}; expected str-like")
@@ -297,9 +278,10 @@ class TokenizePrompt(DataTransformFn):
         prompts = data.pop("prompt", None)
         if prompts is None:
             raise ValueError("Prompt is required")
+        is_batched = isinstance(prompts, list | tuple) or (isinstance(prompts, np.ndarray) and prompts.ndim == 1)
 
         # Convert to list of Python str
-        if isinstance(prompts, (list, tuple)):
+        if isinstance(prompts, list | tuple):
             # Already a list
             prompts_list = [self._to_py_str(p) for p in prompts]
 
@@ -316,7 +298,8 @@ class TokenizePrompt(DataTransformFn):
         else:
             # Single raw value (python str, bytes, etc.)
             prompts_list = [self._to_py_str(prompts)]
-        # print(prompts_list)
+        if not prompts_list:
+            raise ValueError("Prompt batch must not be empty")
         # State handling
         if self.discrete_state_input:
             state = data.get("state", None)
@@ -329,7 +312,7 @@ class TokenizePrompt(DataTransformFn):
                     raise ValueError(
                         f"Batched state length {len(state)} != batched prompts length {len(prompts_list)}"
                     )
-                states_list = [s for s in state]
+                states_list = list(state)
             else:
                 # Single state for all prompts
                 states_list = [state] * len(prompts_list)
@@ -339,19 +322,17 @@ class TokenizePrompt(DataTransformFn):
         # Tokenize each prompt
         token_list = []
         mask_list = []
-        for p, s in zip(prompts_list, states_list):
-            # print("P :", p , "s: ", s )
+        for p, s in zip(prompts_list, states_list, strict=True):
             t, m = self.tokenizer.tokenize(p, s)
             token_list.append(t)
             mask_list.append(m)
 
-        # Stack or unwrap depending on batch size
-        if len(token_list) == 1:
-            tokens = token_list[0][None, :]      # (1, L)
-            masks = mask_list[0][None, :]        # (1, L)
-        else:
+        # Preserve the input's batch contract, including an explicit batch of one.
+        if is_batched:
             tokens = np.stack(token_list, axis=0)
             masks = np.stack(mask_list, axis=0)
+        else:
+            tokens, masks = token_list[0], mask_list[0]
 
         return {
             **data,
@@ -359,27 +340,6 @@ class TokenizePrompt(DataTransformFn):
             "tokenized_prompt_mask": masks,
         }
 
-
-# @dataclasses.dataclass(frozen=True)
-# class TokenizeFASTInputs(DataTransformFn):
-#     tokenizer: _tokenizer.FASTTokenizer
-
-#     def __call__(self, data: DataDict) -> DataDict:
-#         if (prompt := data.pop("prompt", None)) is None:
-#             raise ValueError("Prompt is required")
-
-#         if not isinstance(prompt, str):
-#             prompt = prompt.item()
-
-#         state, actions = data["state"], data.get("actions")
-#         tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize(prompt, state, actions)
-#         return {
-#             **data,
-#             "tokenized_prompt": tokens,
-#             "tokenized_prompt_mask": token_mask,
-#             "token_ar_mask": ar_mask,
-#             "token_loss_mask": loss_mask,
-#         }
 
 @dataclasses.dataclass(frozen=True)
 class TokenizeFASTInputs(DataTransformFn):
@@ -390,10 +350,10 @@ class TokenizeFASTInputs(DataTransformFn):
         if isinstance(x, np.ndarray):
             x = x.item()
 
-        if isinstance(x, (bytes, np.bytes_)):
+        if isinstance(x, bytes | np.bytes_):
             return x.decode("utf-8")
 
-        if isinstance(x, (str, np.str_)):
+        if isinstance(x, str | np.str_):
             return str(x)
 
         raise TypeError(f"Invalid prompt type {type(x)}")
@@ -402,20 +362,17 @@ class TokenizeFASTInputs(DataTransformFn):
         prompts = data.pop("prompt", None)
         if prompts is None:
             raise ValueError("Prompt is required")
-        # print(prompts)
-        # normalize to list of python strings
-        if isinstance(prompts, np.ndarray) and prompts.ndim == 1:
-            prompts_list = [self._to_py_str(p) for p in prompts]
-            # print("here")
-            # print(len(prompts_list))
-            # print(prompts_list[0])
-        else:
-            prompts_list = [self._to_py_str(prompts)]
+        is_batched = isinstance(prompts, list | tuple) or (isinstance(prompts, np.ndarray) and prompts.ndim == 1)
+        prompts_list = [self._to_py_str(p) for p in prompts] if is_batched else [self._to_py_str(prompts)]
+        if not prompts_list:
+            raise ValueError("Prompt batch must not be empty")
 
         # Prepare state list
         state = data["state"]
         if isinstance(state, np.ndarray) and state.ndim >= 2:
-            states_list = [s for s in state]
+            if len(state) != len(prompts_list):
+                raise ValueError("Batched state and prompt lengths must match")
+            states_list = list(state)
         else:
             states_list = [state] * len(prompts_list)
 
@@ -424,35 +381,27 @@ class TokenizeFASTInputs(DataTransformFn):
         if actions is None:
             actions_list = [None] * len(prompts_list)
         elif isinstance(actions, np.ndarray) and actions.ndim >= 3:
-            actions_list = [a for a in actions]
+            if len(actions) != len(prompts_list):
+                raise ValueError("Batched actions and prompt lengths must match")
+            actions_list = list(actions)
         else:
             actions_list = [actions] * len(prompts_list)
 
         toks, masks, ar, loss = [], [], [], []
 
-        for p, s, a in zip(prompts_list, states_list, actions_list):
+        for p, s, a in zip(prompts_list, states_list, actions_list, strict=True):
             t, m, ar_m, loss_m = self.tokenizer.tokenize(p, s, a)
             toks.append(t)
             masks.append(m)
             ar.append(ar_m)
             loss.append(loss_m)
 
-        # # return stacked or single
-        # if len(toks) == 1:
-        #     return {
-        #         **data,
-        #         "tokenized_prompt": toks[0],
-        #         "tokenized_prompt_mask": masks[0],
-        #         "token_ar_mask": ar[0],
-        #         "token_loss_mask": loss[0],
-        #     }
-
         return {
             **data,
-            "tokenized_prompt": np.stack(toks),
-            "tokenized_prompt_mask": np.stack(masks),
-            "token_ar_mask": np.stack(ar),
-            "token_loss_mask": np.stack(loss),
+            "tokenized_prompt": np.stack(toks) if is_batched else toks[0],
+            "tokenized_prompt_mask": np.stack(masks) if is_batched else masks[0],
+            "token_ar_mask": np.stack(ar) if is_batched else ar[0],
+            "token_loss_mask": np.stack(loss) if is_batched else loss[0],
         }
 
 
