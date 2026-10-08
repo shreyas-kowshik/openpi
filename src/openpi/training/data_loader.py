@@ -7,10 +7,6 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
-try:
-    import lerobot.datasets.lerobot_dataset as lerobot_dataset
-except ImportError:  # LeRobot releases before the package namespace migration.
-    import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
 
@@ -414,11 +410,28 @@ def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
     """Create a dataset for training."""
+    if data_config.data_dirs is not None:
+        from openpi.training.robocasa_dataset import RoboCasaDataset
+
+        if tuple(data_config.action_sequence_keys) != ("action",):
+            raise ValueError("Local RoboCasa datasets require action_sequence_keys=('action',)")
+        return RoboCasaDataset(
+            data_config.data_dirs,
+            action_horizon,
+            prompt_from_task=data_config.prompt_from_task,
+            joint_control=data_config.joint_control,
+            dataset_weights=data_config.dataset_weights,
+        )
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
+
+    try:
+        import lerobot.datasets.lerobot_dataset as lerobot_dataset
+    except ImportError:  # LeRobot releases before the package namespace migration.
+        import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
 
@@ -718,6 +731,7 @@ class TorchDataLoader:
         num_workers: int = 0,
         seed: int = 0,
         framework: str = "jax",
+        drop_last: bool = True,
     ):
         """Create a PyTorch data loader.
 
@@ -733,11 +747,12 @@ class TorchDataLoader:
             num_workers: The number of worker processes to use. If zero, the data loader will
                 execute in the main process.
             seed: The seed to use for shuffling the data.
+            drop_last: Drop incomplete batches during training; disable for normalization statistics.
         """
         if jax.process_count() > 1:
             raise NotImplementedError("Data loading with multiple processes is not supported.")
 
-        if len(dataset) < local_batch_size:
+        if drop_last and len(dataset) < local_batch_size:
             raise ValueError(f"Local batch size ({local_batch_size}) is larger than the dataset size ({len(dataset)}).")
 
         # Store sharding - None for PyTorch, JAX sharding for JAX
@@ -766,7 +781,7 @@ class TorchDataLoader:
             persistent_workers=num_workers > 0,
             collate_fn=_collate_fn,
             worker_init_fn=_worker_init_fn,
-            drop_last=True,
+            drop_last=drop_last,
             generator=generator,
         )
 

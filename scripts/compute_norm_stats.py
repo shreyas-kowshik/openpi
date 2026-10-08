@@ -5,6 +5,8 @@ will compute the mean and standard deviation of the data in the dataset and save
 to the config assets directory.
 """
 
+import math
+
 import numpy as np
 import tqdm
 import tyro
@@ -29,8 +31,6 @@ def create_torch_dataloader(
     num_workers: int,
     max_frames: int | None = None,
 ) -> tuple[_data_loader.Dataset, int]:
-    if data_config.repo_id is None:
-        raise ValueError("Data config must have a repo_id")
     dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config)
     dataset = _data_loader.TransformedDataset(
         dataset,
@@ -45,7 +45,7 @@ def create_torch_dataloader(
         num_batches = max_frames // batch_size
         shuffle = True
     else:
-        num_batches = len(dataset) // batch_size
+        num_batches = math.ceil(len(dataset) / batch_size)
         shuffle = False
     data_loader = _data_loader.TorchDataLoader(
         dataset,
@@ -53,6 +53,7 @@ def create_torch_dataloader(
         num_workers=num_workers,
         shuffle=shuffle,
         num_batches=num_batches,
+        drop_last=False,
     )
     return data_loader, num_batches
 
@@ -108,7 +109,10 @@ def main(config_name: str, max_frames: int | None = None):
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = config.assets_dirs / data_config.repo_id
+    asset_id = data_config.asset_id or data_config.repo_id
+    if not asset_id:
+        raise ValueError("Data config must have an asset_id or repo_id to save normalization statistics")
+    output_path = config.assets_dirs / asset_id
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 

@@ -28,6 +28,7 @@ import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
+import openpi.training.robocasa_dataset as robocasa_dataset
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
@@ -80,7 +81,7 @@ class AssetsConfig:
 
 @dataclasses.dataclass(frozen=True)
 class DataConfig:
-    # LeRobot repo id. If None, fake data will be created.
+    # LeRobot repo id. Local RoboCasa datasets instead use data_dirs; fake data uses "fake".
     repo_id: str | None = None
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
@@ -612,7 +613,7 @@ class LeRobotRobocasaDataConfig(DataConfigFactory):
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        repack_transform = _transforms.Group()
+        repack_transform = _transforms.Group(inputs=[robocasa_dataset.RobocasaRepack()])
 
         data_transforms = _transforms.Group(
             inputs=[robocasa_policy.RobocasaInputs(action_dim=model_config.action_dim, model_type=model_config.model_type)],
@@ -635,15 +636,8 @@ class LeRobotRobocasaDataConfig(DataConfigFactory):
         }
         has_any_filter = any(v is not None for v in filter_fields.values())
         if self.data_dirs and has_any_filter:
-            enriched_data_dirs = []
-            for d in self.data_dirs:
-                d_copy = dict(d)
-                for key, value in filter_fields.items():
-                    if value is not None:
-                        d_copy[key] = value
-                enriched_data_dirs.append(d_copy)
-
-        fallback_norm_stats = None
+            filters = {key: value for key, value in filter_fields.items() if value is not None}
+            enriched_data_dirs = [{**entry, **filters} for entry in self.data_dirs]
 
         return dataclasses.replace(
             base,
@@ -652,7 +646,9 @@ class LeRobotRobocasaDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
             data_dirs=enriched_data_dirs,
             dataset_weights=self.dataset_weights,
-            norm_stats=base.norm_stats or fallback_norm_stats,
+            prompt_from_task=True,
+            action_sequence_keys=("action",),
+            norm_stats=base.norm_stats,
         )
 
 
@@ -667,7 +663,7 @@ class LeRobotRobocasaJointDataConfig(LeRobotRobocasaDataConfig):
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        repack_transform = _transforms.Group()
+        base = super().create(assets_dirs, model_config)
 
         data_transforms = _transforms.Group(
             inputs=[robocasa_policy.RobocasaJointInputs(action_dim=model_config.action_dim, model_type=model_config.model_type)],
@@ -683,41 +679,9 @@ class LeRobotRobocasaJointDataConfig(LeRobotRobocasaDataConfig):
             outputs=[_transforms.AbsoluteActions(delta_action_mask)],
         )
 
-        model_transforms = ModelTransformFactory()(model_config)
-
-        base = self.create_base_config(assets_dirs, model_config)
-
-        # Enrich data_dirs with scene filtering params (same logic as parent)
-        enriched_data_dirs = self.data_dirs
-        filter_fields = {
-            "match_episode_id": self.match_episode_id,
-            "layout_and_style_ids": self.layout_and_style_ids,
-            "num_demos": self.num_demos,
-            "obj_category": self.obj_category,
-            "fixture_refs": self.fixture_refs,
-            "object_categories": self.object_categories,
-            "episode_ids": self.episode_ids,
-        }
-        has_any_filter = any(v is not None for v in filter_fields.values())
-        if self.data_dirs and has_any_filter:
-            enriched_data_dirs = []
-            for d in self.data_dirs:
-                d_copy = dict(d)
-                for key, value in filter_fields.items():
-                    if value is not None:
-                        d_copy[key] = value
-                enriched_data_dirs.append(d_copy)
-
-        fallback_norm_stats = None
-
         return dataclasses.replace(
             base,
-            repack_transforms=repack_transform,
             data_transforms=data_transforms,
-            model_transforms=model_transforms,
-            data_dirs=enriched_data_dirs,
-            dataset_weights=self.dataset_weights,
-            norm_stats=base.norm_stats or fallback_norm_stats,
             joint_control=True,
         )
 
@@ -4603,6 +4567,184 @@ _CONFIGS = [
         save_interval=4000,
         keep_period=1000,
         num_workers=4,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+
+    # Standalone RoboCasa BC configs. These do not derive from legacy entries;
+    # each task has its own normalization assets and checkpoint namespace.
+    # Counter to cabinet: layout 1, style 1, recorded episode 32 (one demo).
+    TrainConfig(
+        name="pi05_robocasa_bc_counter_to_cabinet_l1_s1_ep32",
+        project_name="robocasa-openpi-bc",
+        seed=0,
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(asset_id="pi05_robocasa_bc_counter_to_cabinet_l1_s1_ep32"),
+            data_dirs=[
+                {
+                    "path": f"{DATA_ROOT}/robocasa/v1.0/target/atomic/PickPlaceCounterToCabinet/20250811/lerobot",
+                    "filter_key": None,
+                }
+            ],
+            layout_and_style_ids=[(1, 1)],
+            fixture_refs={"cab": "cab_3_main_group", "counter": "counter_right_main_group"},
+            episode_ids=[32],
+            num_demos=1,
+            eval_dataset_path=f"{DATA_ROOT}/robocasa/v1.0/target/atomic/PickPlaceCounterToCabinet/20250811/lerobot",
+            eval_init_mode="exact_state_replay",
+            eval_pool_episode_ids=[32],
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.0,
+            eval_object_pose_noise=0.0,
+            eval_object_ori_noise=0.0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            os.environ.get("OPENPI_PI05_BASE_PARAMS", "gs://openpi-assets/checkpoints/pi05_base/params")
+        ),
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1000,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(),
+        ema_decay=None,
+        assets_base_dir=ASSETS_ROOT,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/robocasa_bc",
+        action_dim=32,
+        num_train_steps=100_000,
+        batch_size=64,
+        num_workers=4,
+        save_interval=4000,
+        keep_period=1000,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # Fridge drawer to shelf: layout 50, style 37, first matching demo.
+    TrainConfig(
+        name="pi05_robocasa_bc_fridge_drawer_to_shelf_l50_s37",
+        project_name="robocasa-openpi-bc",
+        seed=0,
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(asset_id="pi05_robocasa_bc_fridge_drawer_to_shelf_l50_s37"),
+            data_dirs=[
+                {
+                    "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/atomic/PickPlaceFridgeDrawerToShelf/20250821/lerobot",
+                    "filter_key": None,
+                }
+            ],
+            layout_and_style_ids=[(50, 37)],
+            fixture_refs={"fridge": "fridgefrenchdoor_left_group_1"},
+            num_demos=1,
+            eval_dataset_path=f"{DATA_ROOT}/robocasa/v1.0/pretrain/atomic/PickPlaceFridgeDrawerToShelf/20250821/lerobot",
+            eval_init_mode="exact_state_replay",
+            eval_pool_episode_ids=[40],
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.0,
+            eval_object_pose_noise=0.0,
+            eval_object_ori_noise=0.0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            os.environ.get("OPENPI_PI05_BASE_PARAMS", "gs://openpi-assets/checkpoints/pi05_base/params")
+        ),
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1000,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(),
+        ema_decay=None,
+        assets_base_dir=ASSETS_ROOT,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/robocasa_bc",
+        action_dim=12,
+        num_train_steps=100_000,
+        batch_size=64,
+        num_workers=4,
+        save_interval=4000,
+        keep_period=1000,
+        log_interval=100,
+        action_l1_loss_interval=1000,
+    ),
+    # Prepare coffee: layout 25, style 29, first matching demo.
+    TrainConfig(
+        name="pi05_robocasa_bc_prepare_coffee_l25_s29",
+        project_name="robocasa-openpi-bc",
+        seed=0,
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+            discrete_state_input=False,
+        ),
+        data=LeRobotRobocasaDataConfig(
+            assets=AssetsConfig(asset_id="pi05_robocasa_bc_prepare_coffee_l25_s29"),
+            data_dirs=[
+                {
+                    "path": f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+                    "filter_key": None,
+                }
+            ],
+            layout_and_style_ids=[(25, 29)],
+            fixture_refs={"coffee_machine": "coffee_machine_main_group", "cab": "cab_4_main_group"},
+            num_demos=1,
+            eval_dataset_path=f"{DATA_ROOT}/robocasa/v1.0/pretrain/composite/PrepareCoffee/20250716/lerobot",
+            eval_init_mode="exact_state_replay",
+            eval_pool_episode_ids=[4],
+            eval_keep_robot_pose=True,
+            eval_robot_pose_noise=0.0,
+            eval_object_pose_noise=0.0,
+            eval_object_ori_noise=0.0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            os.environ.get("OPENPI_PI05_BASE_PARAMS", "gs://openpi-assets/checkpoints/pi05_base/params")
+        ),
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m",
+        ).get_freeze_filter(),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1000,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(),
+        ema_decay=None,
+        assets_base_dir=ASSETS_ROOT,
+        checkpoint_base_dir=f"{CHECKPOINT_ROOT}/robocasa_bc",
+        action_dim=12,
+        num_train_steps=100_000,
+        batch_size=64,
+        num_workers=4,
+        save_interval=4000,
+        keep_period=1000,
         log_interval=100,
         action_l1_loss_interval=1000,
     ),
